@@ -40,6 +40,7 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
   const user = await requireAdmin();
 
   const file = formData.get('csv') as File | null;
+  const explicitEventName = (formData.get('eventName') as string | null)?.trim() || '';
   if (!file) {
     return { ok: false, totalRows: 0, succeeded: 0, failed: 0, totalAmount: 0, results: [], campaigns: [], message: 'No file provided' };
   }
@@ -91,21 +92,37 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
     };
   }
 
-  // Group rows by campaign (note field) and create one event row per group
+  // Determine event grouping: if user provided an explicit name, all rows go
+  // into one event. Otherwise group by `note` column (existing behavior).
   const justRows = validRows.map((v) => v.row);
-  const groups = groupRowsByCampaign(justRows);
   const campaignRecords: Array<{ name: string; eventId: string; rowCount: number }> = [];
   const eventIdByCampaign = new Map<string, string>();
 
-  for (const [campaignName, group] of groups.entries()) {
+  if (explicitEventName) {
+    // Single event for the whole upload. findOrCreateEvent merges by exact
+    // name — so re-uploading with the same name extends the same event,
+    // which matches our re-upload regression test behavior.
+    const host = explicitEventName.includes(' - ') ? explicitEventName.split(' - ')[0] : undefined;
     const eventId = await findOrCreateEvent({
-      name: campaignName,
-      host: group.host,
+      name: explicitEventName,
+      host,
       uploadedBy: user.id,
       sourceFilename: file.name,
     });
-    eventIdByCampaign.set(campaignName, eventId);
-    campaignRecords.push({ name: campaignName, eventId, rowCount: group.rows.length });
+    eventIdByCampaign.set('__all__', eventId);
+    campaignRecords.push({ name: explicitEventName, eventId, rowCount: validRows.length });
+  } else {
+    const groups = groupRowsByCampaign(justRows);
+    for (const [campaignName, group] of groups.entries()) {
+      const eventId = await findOrCreateEvent({
+        name: campaignName,
+        host: group.host,
+        uploadedBy: user.id,
+        sourceFilename: file.name,
+      });
+      eventIdByCampaign.set(campaignName, eventId);
+      campaignRecords.push({ name: campaignName, eventId, rowCount: group.rows.length });
+    }
   }
 
   // Process rows sequentially (rate-limit safe)
@@ -114,8 +131,9 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
   let totalAmount = 0;
 
   for (const { row, rowIndex } of validRows) {
-    const campaignName = (row.note || row.reason || 'Untitled').trim();
-    const eventId = eventIdByCampaign.get(campaignName)!;
+    const eventId = explicitEventName
+      ? eventIdByCampaign.get('__all__')!
+      : eventIdByCampaign.get((row.note || row.reason || 'Untitled').trim())!;
     const result = await processRiseRow({ rowIndex, row, eventId, uploadedBy: user.id });
     results.push(result);
     if (result.ok) {

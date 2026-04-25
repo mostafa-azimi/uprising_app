@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { CopyButton } from '@/components/copy-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -110,7 +111,17 @@ export default async function CustomerDetail({ params }: { params: Params }) {
       <section className="grid sm:grid-cols-3 gap-3 mb-8">
         <Stat label="Balance" value={fmtMoney(customer.total_balance_cached)} />
         <Stat label="Active grants" value={String(activeGrants.length)} />
-        <Stat label="Loyalty card code" value={customer.loyalty_card_code ?? '—'} mono />
+        <div className="p-4 rounded-xl border border-line bg-white">
+          <div className="text-xs text-muted uppercase tracking-wide">Loyalty card code</div>
+          {customer.loyalty_card_code ? (
+            <div className="mt-1 flex items-center gap-2">
+              <span className="font-mono text-base break-all">{customer.loyalty_card_code}</span>
+              <CopyButton value={customer.loyalty_card_code} size="md" label="Copy" />
+            </div>
+          ) : (
+            <div className="text-2xl font-bold mt-1">—</div>
+          )}
+        </div>
       </section>
 
       {/* Active grants */}

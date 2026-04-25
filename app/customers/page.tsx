@@ -1,38 +1,50 @@
 import Link from 'next/link';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { CopyButton } from '@/components/copy-button';
 
 export const dynamic = 'force-dynamic';
 
 interface SearchParams { q?: string; sort?: string }
 
+function fmtRelative(iso: string | null | undefined) {
+  if (!iso) return '—';
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  const diffSec = Math.round((now - then) / 1000);
+  if (diffSec < 60) return 'just now';
+  if (diffSec < 3600) return `${Math.round(diffSec / 60)}m ago`;
+  if (diffSec < 86400) return `${Math.round(diffSec / 3600)}h ago`;
+  if (diffSec < 86400 * 30) return `${Math.round(diffSec / 86400)}d ago`;
+  return new Date(iso).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
 export default async function CustomersPage({ searchParams }: { searchParams: SearchParams }) {
   const supabase = createSupabaseServerClient();
   const q = (searchParams.q ?? '').trim().toLowerCase();
-  const sort = searchParams.sort ?? 'balance_desc';
+  const sort = searchParams.sort ?? 'recent_activity';
 
-  // Pull customers with grant aggregates
   let query = supabase
     .from('customers')
-    .select('id, email, first_name, last_name, total_balance_cached, loyalty_card_code, shopify_store_credit_account_id, created_at');
+    .select('id, email, first_name, last_name, total_balance_cached, loyalty_card_code, shopify_store_credit_account_id, created_at, updated_at');
 
   if (q) {
     query = query.ilike('email', `%${q}%`);
   }
 
-  // Sort
   const sorts: Record<string, { col: string; ascending: boolean }> = {
+    recent_activity: { col: 'updated_at', ascending: false },
     balance_desc: { col: 'total_balance_cached', ascending: false },
     balance_asc: { col: 'total_balance_cached', ascending: true },
     email_asc: { col: 'email', ascending: true },
     email_desc: { col: 'email', ascending: false },
-    recent: { col: 'created_at', ascending: false },
+    created_desc: { col: 'created_at', ascending: false },
   };
-  const s = sorts[sort] ?? sorts.balance_desc;
+  const s = sorts[sort] ?? sorts.recent_activity;
   query = query.order(s.col, { ascending: s.ascending });
 
   const { data: customers, error } = await query.limit(200);
 
-  // Grant counts in a separate query (Supabase JS doesn't expose joins with counts cleanly)
+  // Grant counts in a separate query
   const ids = (customers ?? []).map((c) => c.id);
   const grantCounts: Record<string, { active: number; total: number }> = {};
   if (ids.length) {
@@ -66,11 +78,12 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
           defaultValue={sort}
           className="border border-line rounded-lg px-3 py-2 text-sm bg-white"
         >
+          <option value="recent_activity">Recently active</option>
           <option value="balance_desc">Balance (high → low)</option>
           <option value="balance_asc">Balance (low → high)</option>
           <option value="email_asc">Email (A → Z)</option>
           <option value="email_desc">Email (Z → A)</option>
-          <option value="recent">Recently added</option>
+          <option value="created_desc">Recently added</option>
         </select>
         <button className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-medium">Apply</button>
       </form>
@@ -90,6 +103,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
                 <th className="py-2 px-4 font-medium">Balance</th>
                 <th className="py-2 px-4 font-medium">Active grants</th>
                 <th className="py-2 px-4 font-medium">Loyalty code</th>
+                <th className="py-2 px-4 font-medium">Last activity</th>
                 <th className="py-2 px-4 font-medium"></th>
               </tr>
             </thead>
@@ -110,8 +124,18 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
                     <td className="py-2 px-4">
                       {gc.active}{gc.total > gc.active ? <span className="text-muted text-xs"> / {gc.total} total</span> : null}
                     </td>
-                    <td className="py-2 px-4 font-mono text-xs text-muted">
-                      {c.loyalty_card_code ?? '—'}
+                    <td className="py-2 px-4">
+                      {c.loyalty_card_code ? (
+                        <span className="inline-flex items-center font-mono text-xs text-muted">
+                          {c.loyalty_card_code}
+                          <CopyButton value={c.loyalty_card_code} />
+                        </span>
+                      ) : (
+                        <span className="text-muted">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 px-4 text-muted text-xs" title={c.updated_at ?? ''}>
+                      {fmtRelative(c.updated_at)}
                     </td>
                     <td className="py-2 px-4 text-right">
                       <Link href={`/customers/${c.id}`} className="text-ink underline">
