@@ -88,6 +88,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
           sortKey={sortKey}
           dir={dir}
           q={q}
+          shopAdminBase={`https://admin.shopify.com/store/${(process.env.SHOPIFY_STORE_DOMAIN || '').replace('.myshopify.com', '')}`}
         />
       )}
 

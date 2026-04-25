@@ -49,13 +49,14 @@ const HEADERS: Array<{ key: string; label: string; sortable: boolean }> = [
 ];
 
 export function CustomersTable({
-  customers, grantCounts, sortKey, dir, q,
+  customers, grantCounts, sortKey, dir, q, shopAdminBase,
 }: {
   customers: Customer[];
   grantCounts: Record<string, { active: number; total: number }>;
   sortKey: string;
   dir: 'asc' | 'desc';
   q: string;
+  shopAdminBase: string;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -233,9 +234,21 @@ export function CustomersTable({
                   </td>
                   <td className="py-2 px-4">
                     {c.loyalty_card_code ? (
-                      <span className="inline-flex items-center font-mono text-xs text-muted">
+                      <span className="inline-flex items-center gap-1 font-mono text-xs text-muted">
                         {c.loyalty_card_code}
                         <CopyButton value={c.loyalty_card_code} />
+                        {c.shopify_gift_card_id && (
+                          <a
+                            href={`${shopAdminBase}/gift_cards/${c.shopify_gift_card_id.split('/').pop()}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            title="Open this gift card in Shopify admin"
+                            aria-label="Open gift card in Shopify"
+                            className="inline-flex items-center justify-center w-5 h-5 rounded border border-line bg-white hover:text-ink hover:border-ink"
+                          >
+                            ↗
+                          </a>
+                        )}
                       </span>
                     ) : (
                       <span className="text-muted">—</span>
