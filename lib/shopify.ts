@@ -222,23 +222,59 @@ export async function getGiftCard(id: string) {
 }
 
 /**
- * Search Shopify for a gift card by the last 4 characters of its code.
- * Used post-seed to find the gift card ID for a customer migrated from Rise
- * (we have the loyalty_card_code from Klaviyo, just need to find the ID).
+ * Search Shopify for gift cards by the last 4 characters of the code.
  *
- * Returns all matching gift cards. The caller verifies which one matches by
- * comparing `lastCharacters` and balance.
+ * Tries multiple search-syntax variants for resilience across API versions
+ * (older versions accept `code:`, newer accept `last_characters:`).
  */
 export async function findGiftCardsByLast4(last4: string) {
-  const r = await shopifyGql<{
-    giftCards: { edges: Array<{ node: { id: string; maskedCode: string | null; lastCharacters: string | null; balance: { amount: string; currencyCode: string }; enabled: boolean } }> };
-  }>(
-    `query($q: String!) {
-       giftCards(first: 20, query: $q) {
-         edges { node { id maskedCode lastCharacters balance { amount currencyCode } enabled } }
-       }
-     }`,
-    { q: `code:${last4}` }
-  );
-  return (r.data?.giftCards.edges ?? []).map((e) => e.node);
+  type Node = {
+    id: string;
+    maskedCode: string | null;
+    lastCharacters: string | null;
+    balance: { amount: string; currencyCode: string };
+    enabled: boolean;
+  };
+
+  const tries = [
+    `last_characters:${last4}`,
+    `code:${last4}`,
+    `last_characters:'${last4}'`,
+  ];
+
+  const seen = new Map<string, Node>();
+  for (const q of tries) {
+    try {
+      const r = await shopifyGql<{
+        giftCards: { edges: Array<{ node: Node }> };
+      }>(
+        `query($q: String!) {
+           giftCards(first: 50, query: $q) {
+             edges { node { id maskedCode lastCharacters balance { amount currencyCode } enabled } }
+           }
+         }`,
+        { q }
+      );
+      for (const e of r.data?.giftCards.edges ?? []) {
+        seen.set(e.node.id, e.node);
+      }
+      if (seen.size > 0) break; // first variant that returns something wins
+    } catch {
+      // Try next syntax — some accounts/versions reject specific filters
+    }
+  }
+
+  // As a last resort: empty query (returns most-recent cards) and filter client-side
+  if (seen.size === 0) {
+    const r = await shopifyGql<{
+      giftCards: { edges: Array<{ node: Node }> };
+    }>(
+      `query { giftCards(first: 250) { edges { node { id maskedCode lastCharacters balance { amount currencyCode } enabled } } } }`
+    );
+    for (const e of r.data?.giftCards.edges ?? []) {
+      if (e.node.lastCharacters === last4) seen.set(e.node.id, e.node);
+    }
+  }
+
+  return Array.from(seen.values());
 }

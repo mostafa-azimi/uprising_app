@@ -123,22 +123,24 @@ async function applyGrantToGiftCard(args: {
   if (customer.loyalty_card_code && !customer.shopify_gift_card_id) {
     const last4 = customer.loyalty_card_code.slice(-4);
     const candidates = await findGiftCardsByLast4(last4);
-    // We only have the last4 to filter Shopify, but our customer record holds
-    // the full code. Match by exact lastCharacters then verify by re-encoding
-    // last4 of the known full code.
-    const match = candidates.find((c) => c.lastCharacters === last4 && c.enabled);
-    if (!match) {
+    const exactMatches = candidates.filter((c) => c.lastCharacters === last4);
+    const enabledMatches = exactMatches.filter((c) => c.enabled);
+
+    if (enabledMatches.length === 0) {
+      const diag = `last4=${last4} candidates_returned=${candidates.length} exact_match=${exactMatches.length} enabled=${enabledMatches.length} disabled=${exactMatches.length - enabledMatches.length}`;
       throw new Error(
-        `Customer has loyalty_card_code ${customer.loyalty_card_code} from Rise but no matching gift card found in Shopify. ` +
-        `Manually link the gift card ID via SQL or contact support.`
+        `No matching enabled Shopify gift card for loyalty_card_code ${customer.loyalty_card_code}. ${diag}. ` +
+        `Either the gift card was deleted/disabled, or Shopify search isn't indexing it. ` +
+        `Manually link via SQL: update customers set shopify_gift_card_id='gid://shopify/GiftCard/<ID>' where email='${customer.email}'.`
       );
     }
-    if (candidates.filter((c) => c.lastCharacters === last4 && c.enabled).length > 1) {
+    if (enabledMatches.length > 1) {
       throw new Error(
-        `Multiple gift cards in Shopify match last4=${last4}. Cannot disambiguate automatically. Link manually via SQL.`
+        `Multiple enabled gift cards match last4=${last4} (${enabledMatches.length}). Cannot disambiguate. Link manually via SQL.`
       );
     }
 
+    const match = enabledMatches[0];
     const { error: linkErr } = await supabase
       .from('customers')
       .update({
@@ -148,7 +150,6 @@ async function applyGrantToGiftCard(args: {
       .eq('id', customer.id);
     if (linkErr) throw new Error(`gift card link update: ${linkErr.message}`);
 
-    // Now credit it
     const credit = await giftCardCredit(match.id, amount.toFixed(2), noteForShopify);
     return {
       id: match.id,
