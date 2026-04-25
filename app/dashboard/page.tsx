@@ -45,10 +45,10 @@ export default async function DashboardPage() {
           <h2 className="font-semibold mb-1">Upload event credits</h2>
           <p className="text-sm text-muted">Drop a Rise-format CSV. Each row issues a grant, updates Shopify, and syncs Klaviyo properties.</p>
         </Link>
-        <div className="block p-6 border border-line rounded-xl bg-white opacity-60">
+        <Link href="/customers" className="block p-6 border border-line rounded-xl bg-white hover:border-ink transition">
           <h2 className="font-semibold mb-1">Customers</h2>
-          <p className="text-sm text-muted">Coming soon: search, balances, edit grants.</p>
-        </div>
+          <p className="text-sm text-muted">Search by email, see balances, drill into grant + ledger history.</p>
+        </Link>
         <div className="block p-6 border border-line rounded-xl bg-white opacity-60">
           <h2 className="font-semibold mb-1">Events</h2>
           <p className="text-sm text-muted">Coming soon: campaign history and exports.</p>
