@@ -192,6 +192,7 @@ export async function processRiseRow(args: {
   row: RiseRow;
   eventId: string;
   uploadedBy?: string;
+  uploadedByEmail?: string | null;
 }): Promise<RowResult> {
   const { rowIndex, row, eventId } = args;
   const email = row.customer_email.trim().toLowerCase();
@@ -292,6 +293,8 @@ export async function processRiseRow(args: {
       amount,
       shopify_transaction_id: giftCard.creditTxnId,
       description: row.note || row.reason || 'Issue',
+      created_by: args.uploadedBy ?? null,
+      created_by_email: args.uploadedByEmail ?? null,
     });
     if (lErr) throw new Error(lErr.message);
   } catch (e) {

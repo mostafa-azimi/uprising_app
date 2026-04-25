@@ -24,6 +24,7 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     amount,
     reason,
     expiresOn: body.expiresOn,
+    actor: { id: user.id, email: user.email ?? null },
   });
   if (!result.ok) return NextResponse.json({ error: result.error ?? 'adjust failed' }, { status: 500 });
   return NextResponse.json(result);

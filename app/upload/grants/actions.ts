@@ -142,7 +142,11 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
   let totalAmount = 0;
 
   for (const { row, rowIndex } of validRows) {
-    const result = await processRiseRow({ rowIndex, row, eventId, uploadedBy: user.id });
+    const result = await processRiseRow({
+      rowIndex, row, eventId,
+      uploadedBy: user.id,
+      uploadedByEmail: user.email ?? null,
+    });
     results.push(result);
     if (result.ok) {
       succeeded++;

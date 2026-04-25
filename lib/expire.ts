@@ -25,7 +25,7 @@ export interface ExpireResult {
  *   - Insert ledger 'expire' rows
  *   - Update Klaviyo loyalty_card_balance to 0
  */
-export async function expireCustomerBalance(customerId: string, reason = 'Manual expire'): Promise<ExpireResult> {
+export async function expireCustomerBalance(customerId: string, reason = 'Manual expire', actor?: { id: string; email?: string | null }): Promise<ExpireResult> {
   const supabase = createSupabaseServiceClient();
 
   const { data: customer, error: cErr } = await supabase
@@ -84,6 +84,8 @@ export async function expireCustomerBalance(customerId: string, reason = 'Manual
         type: 'expire' as const,
         amount: -Number(g.remaining_amount),
         description: reason,
+        created_by: actor?.id ?? null,
+        created_by_email: actor?.email ?? null,
       }));
     if (ledgerRows.length) {
       await supabase.from('ledger').insert(ledgerRows);
@@ -97,6 +99,8 @@ export async function expireCustomerBalance(customerId: string, reason = 'Manual
       type: 'expire',
       amount: -debited,
       description: `${reason} (no local grants — Shopify balance expired directly)`,
+      created_by: actor?.id ?? null,
+      created_by_email: actor?.email ?? null,
     });
   }
 
@@ -136,6 +140,7 @@ export async function adjustCustomerBalance(args: {
   amount: number;            // positive credit, negative debit
   reason: string;
   expiresOn?: string;        // YYYY-MM-DD; only used for credits, default 1y from today
+  actor?: { id: string; email?: string | null };
 }): Promise<{ ok: boolean; new_balance: number; error?: string }> {
   const { customerId, amount, reason } = args;
   if (amount === 0) return { ok: false, new_balance: 0, error: 'amount must be nonzero' };
@@ -200,6 +205,8 @@ export async function adjustCustomerBalance(args: {
       type: 'adjust',
       amount,
       description: reason,
+      created_by: args.actor?.id ?? null,
+      created_by_email: args.actor?.email ?? null,
     });
   } else {
     // Debit path — reduce FIFO from active grants
@@ -233,6 +240,8 @@ export async function adjustCustomerBalance(args: {
         type: 'adjust',
         amount: -take,
         description: reason,
+        created_by: args.actor?.id ?? null,
+        created_by_email: args.actor?.email ?? null,
       });
       remaining -= take;
     }

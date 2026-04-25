@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
   let failed = 0;
 
   for (const id of ids) {
-    const r = await expireCustomerBalance(id, reason);
+    const r = await expireCustomerBalance(id, reason, { id: user.id, email: user.email ?? null });
     results.push(r);
     if (r.ok) {
       succeeded++;
