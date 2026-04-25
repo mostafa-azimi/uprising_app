@@ -105,10 +105,30 @@ export async function giftCardCreate(input: {
   expiresOn?: string;         // YYYY-MM-DD
   note?: string;
 }): Promise<ShopifyGiftCard> {
-  const r = await shopifyGql<{ giftCardCreate: { giftCard: ShopifyGiftCard | null; userErrors: Array<{ field: string[]; message: string }> } }>(
+  // 2025-04+: full code is on payload (giftCardCode); customerId moved to customer.id
+  const r = await shopifyGql<{
+    giftCardCreate: {
+      giftCardCode: string | null;
+      giftCard: {
+        id: string;
+        maskedCode?: string;
+        lastCharacters?: string;
+        balance: { amount: string; currencyCode: string };
+        customer: { id: string } | null;
+      } | null;
+      userErrors: Array<{ field: string[]; message: string }>;
+    };
+  }>(
     `mutation($input: GiftCardCreateInput!) {
        giftCardCreate(input: $input) {
-         giftCard { id code maskedCode lastCharacters balance { amount currencyCode } customerId }
+         giftCardCode
+         giftCard {
+           id
+           maskedCode
+           lastCharacters
+           balance { amount currencyCode }
+           customer { id }
+         }
          userErrors { field message }
        }
      }`,
@@ -116,8 +136,16 @@ export async function giftCardCreate(input: {
   );
   const errs = r.data?.giftCardCreate.userErrors ?? [];
   if (errs.length) throw new Error('giftCardCreate: ' + errs.map((e) => e.message).join('; '));
-  if (!r.data?.giftCardCreate.giftCard) throw new Error('giftCardCreate returned no card');
-  return r.data.giftCardCreate.giftCard;
+  const gc = r.data?.giftCardCreate.giftCard;
+  if (!gc) throw new Error('giftCardCreate returned no card');
+  return {
+    id: gc.id,
+    code: r.data!.giftCardCreate.giftCardCode ?? undefined,
+    maskedCode: gc.maskedCode,
+    lastCharacters: gc.lastCharacters,
+    balance: gc.balance,
+    customerId: gc.customer?.id ?? null,
+  };
 }
 
 export async function giftCardCredit(id: string, amount: string, note?: string) {
@@ -153,13 +181,33 @@ export async function giftCardDebit(id: string, amount: string, note?: string) {
 }
 
 export async function getGiftCard(id: string) {
-  const r = await shopifyGql<{ giftCard: { id: string; balance: { amount: string; currencyCode: string }; enabled: boolean; expiresOn: string | null; customerId: string | null } | null }>(
+  const r = await shopifyGql<{
+    giftCard: {
+      id: string;
+      balance: { amount: string; currencyCode: string };
+      enabled: boolean;
+      expiresOn: string | null;
+      customer: { id: string } | null;
+    } | null;
+  }>(
     `query($id: ID!) {
        giftCard(id: $id) {
-         id balance { amount currencyCode } enabled expiresOn customerId
+         id
+         balance { amount currencyCode }
+         enabled
+         expiresOn
+         customer { id }
        }
      }`,
     { id }
   );
-  return r.data?.giftCard ?? null;
+  const gc = r.data?.giftCard;
+  if (!gc) return null;
+  return {
+    id: gc.id,
+    balance: gc.balance,
+    enabled: gc.enabled,
+    expiresOn: gc.expiresOn,
+    customerId: gc.customer?.id ?? null,
+  };
 }
