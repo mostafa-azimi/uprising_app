@@ -154,5 +154,5 @@ export async function POST(request: NextRequest) {
     description: `Shopify order redemption${email ? ' — ' + email : ''}`,
   });
 
-  return NextResponse.json({ ok: result.ok, ...result });
+  return NextResponse.json(result);
 }
