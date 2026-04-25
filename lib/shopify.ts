@@ -148,9 +148,9 @@ export interface GiftCardCreditResult {
 }
 
 /** Add balance to an existing gift card. Used on every grant after the first. */
-export async function giftCardCredit(id: string, amount: string, note?: string): Promise<GiftCardCreditResult> {
-  // 2025-04+: GiftCardCreditPayload no longer has a top-level `giftCard` field.
-  // The gift card is reached through the transaction.
+export async function giftCardCredit(id: string, amount: string, note?: string, currencyCode = 'USD'): Promise<GiftCardCreditResult> {
+  // 2025-04+: input shape changed to creditAmount: MoneyInput, and giftCard
+  // moved under the transaction.
   const r = await shopifyGql<{
     giftCardCredit: {
       giftCardCreditTransaction: {
@@ -171,7 +171,13 @@ export async function giftCardCredit(id: string, amount: string, note?: string):
          userErrors { field message }
        }
      }`,
-    { id, creditInput: { amount, note } }
+    {
+      id,
+      creditInput: {
+        creditAmount: { amount, currencyCode },
+        note,
+      },
+    }
   );
   const errs = r.data?.giftCardCredit.userErrors ?? [];
   if (errs.length) throw new Error('giftCardCredit: ' + errs.map((e) => e.message).join('; '));
@@ -184,7 +190,7 @@ export async function giftCardCredit(id: string, amount: string, note?: string):
 }
 
 /** Reduce an existing gift card balance. Used for expirations and manual debits. */
-export async function giftCardDebit(id: string, amount: string, note?: string): Promise<GiftCardCreditResult> {
+export async function giftCardDebit(id: string, amount: string, note?: string, currencyCode = 'USD'): Promise<GiftCardCreditResult> {
   const r = await shopifyGql<{
     giftCardDebit: {
       giftCardDebitTransaction: {
@@ -205,7 +211,13 @@ export async function giftCardDebit(id: string, amount: string, note?: string): 
          userErrors { field message }
        }
      }`,
-    { id, debitInput: { amount, note } }
+    {
+      id,
+      debitInput: {
+        debitAmount: { amount, currencyCode },
+        note,
+      },
+    }
   );
   const errs = r.data?.giftCardDebit.userErrors ?? [];
   if (errs.length) throw new Error('giftCardDebit: ' + errs.map((e) => e.message).join('; '));
