@@ -124,28 +124,42 @@ async function ensureShopifyCustomer(c: LocalCustomer): Promise<string> {
 }
 
 /**
- * Ensure customer has a Shopify gift card. Creates one with $0 balance on first grant.
- * Returns the gift card ID.
+ * Apply a grant to the customer's Shopify gift card.
+ *  - If no card yet: create one with `amount` as initialValue (Shopify requires > 0).
+ *  - If card exists: credit it for `amount`.
+ *
+ * Returns the gift card identity plus the credit transaction id (null on first-grant create).
  */
-async function ensureGiftCard(c: LocalCustomer, shopifyCustomerId: string): Promise<{ id: string; code: string | null; last4: string | null }> {
-  if (c.shopify_gift_card_id) {
+async function applyGrantToGiftCard(args: {
+  customer: LocalCustomer;
+  shopifyCustomerId: string;
+  amount: number;
+  noteForShopify: string;
+}): Promise<{ id: string; code: string | null; last4: string | null; creditTxnId: string | null }> {
+  const { customer, shopifyCustomerId, amount, noteForShopify } = args;
+  const supabase = createSupabaseServiceClient();
+
+  if (customer.shopify_gift_card_id) {
+    // Existing card — credit it
+    const credit = await giftCardCredit(customer.shopify_gift_card_id, amount.toFixed(2), noteForShopify);
     return {
-      id: c.shopify_gift_card_id,
-      code: c.shopify_gift_card_code,
-      last4: c.shopify_gift_card_last4,
+      id: customer.shopify_gift_card_id,
+      code: customer.shopify_gift_card_code,
+      last4: customer.shopify_gift_card_last4,
+      creditTxnId: credit.giftCardCreditTransaction?.id ?? null,
     };
   }
 
+  // First grant — create the card with the grant amount as initial value
   const card = await giftCardCreate({
-    initialValue: '0.00',
+    initialValue: amount.toFixed(2),
     customerId: shopifyCustomerId,
-    note: `Created by Uprising for ${c.email}`,
+    note: noteForShopify,
   });
 
-  const last4 = card.lastCharacters ?? null;
   const code = card.code ?? null;
+  const last4 = card.lastCharacters ?? null;
 
-  const supabase = createSupabaseServiceClient();
   const { error } = await supabase
     .from('customers')
     .update({
@@ -153,10 +167,10 @@ async function ensureGiftCard(c: LocalCustomer, shopifyCustomerId: string): Prom
       shopify_gift_card_code: code,
       shopify_gift_card_last4: last4,
     })
-    .eq('id', c.id);
+    .eq('id', customer.id);
   if (error) throw new Error(`customers.shopify_gift_card update: ${error.message}`);
 
-  return { id: card.id, code, last4 };
+  return { id: card.id, code, last4, creditTxnId: null };
 }
 
 /**
@@ -187,19 +201,16 @@ export async function processRiseRow(args: {
   const amount = Number(row.adjust_amount);
 
   let shopifyCustomerId: string;
-  let giftCard: { id: string; code: string | null; last4: string | null };
-  let creditTxnId: string | null = null;
+  let giftCard: { id: string; code: string | null; last4: string | null; creditTxnId: string | null };
 
   try {
     shopifyCustomerId = await ensureShopifyCustomer(customer);
-    giftCard = await ensureGiftCard({ ...customer, shopify_customer_id: shopifyCustomerId }, shopifyCustomerId);
-
-    const credit = await giftCardCredit(
-      giftCard.id,
-      amount.toFixed(2),
-      `Uprising grant — event:${eventId} — ${row.note || row.reason || ''} — exp:${expiresOn}`
-    );
-    creditTxnId = credit.giftCardCreditTransaction?.id ?? null;
+    giftCard = await applyGrantToGiftCard({
+      customer: { ...customer, shopify_customer_id: shopifyCustomerId },
+      shopifyCustomerId,
+      amount,
+      noteForShopify: `Uprising grant — event:${eventId} — ${row.note || row.reason || ''} — exp:${expiresOn}`,
+    });
   } catch (e) {
     const errMsg = (e as Error).message;
     const stack = (e as Error).stack ?? '';
@@ -241,7 +252,7 @@ export async function processRiseRow(args: {
       grant_id: grantId,
       type: 'issue',
       amount,
-      shopify_transaction_id: creditTxnId,
+      shopify_transaction_id: giftCard.creditTxnId,
       description: row.note || row.reason || 'Issue',
     });
     if (lErr) throw new Error(lErr.message);
