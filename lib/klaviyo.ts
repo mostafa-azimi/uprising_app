@@ -58,6 +58,68 @@ export interface KlaviyoProfileLookup {
   properties: Record<string, unknown>;
 }
 
+/**
+ * Fetch one page of profiles. Used by the seed/migration importer.
+ * Optionally scoped to a single Klaviyo list.
+ *
+ * Klaviyo paginates with opaque cursors in `links.next` URLs.
+ *
+ * @param cursor `links.next` URL from the previous page, or null for first page
+ * @param listId optional Klaviyo list ID to scope the query
+ * @param pageSize 1–100, default 100
+ */
+export async function listProfilesPage(args: {
+  cursor?: string | null;
+  listId?: string;
+  pageSize?: number;
+}): Promise<{
+  profiles: KlaviyoProfileLookup[];
+  nextCursor: string | null;
+}> {
+  const pageSize = Math.min(args.pageSize ?? 100, 100);
+
+  let url: URL;
+  if (args.cursor) {
+    // Klaviyo returns the next URL fully formed
+    url = new URL(args.cursor);
+  } else if (args.listId) {
+    url = new URL(`${BASE}/lists/${args.listId}/profiles/`);
+    url.searchParams.set('page[size]', String(pageSize));
+    url.searchParams.set('fields[profile]', 'email,first_name,last_name,properties');
+  } else {
+    url = new URL(`${BASE}/profiles/`);
+    url.searchParams.set('page[size]', String(pageSize));
+    url.searchParams.set('fields[profile]', 'email,first_name,last_name,properties');
+  }
+
+  const res = await fetch(url, { headers: headers(), cache: 'no-store' });
+  if (!res.ok) throw new Error(`Klaviyo listProfilesPage ${res.status}: ${(await res.text()).slice(0, 300)}`);
+
+  const json = (await res.json()) as {
+    data: Array<{
+      id: string;
+      attributes: {
+        email: string;
+        first_name: string | null;
+        last_name: string | null;
+        properties?: Record<string, unknown>;
+      };
+    }>;
+    links?: { next?: string | null };
+  };
+
+  return {
+    profiles: json.data.map((p) => ({
+      id: p.id,
+      email: p.attributes.email,
+      first_name: p.attributes.first_name,
+      last_name: p.attributes.last_name,
+      properties: p.attributes.properties ?? {},
+    })),
+    nextCursor: json.links?.next ?? null,
+  };
+}
+
 export async function findProfileByEmail(email: string): Promise<KlaviyoProfileLookup | null> {
   const url = new URL(`${BASE}/profiles/`);
   url.searchParams.set('filter', `equals(email,"${email}")`);

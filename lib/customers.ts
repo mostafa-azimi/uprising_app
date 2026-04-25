@@ -5,8 +5,9 @@
  * credit. If they're not in Klaviyo, we reject the row with a clear error so
  * the admin knows to upload them to Klaviyo first.
  *
- * On first lookup we capture Klaviyo's custom properties so we can reuse an
- * existing `loyalty_card_code` (matching Rise's identifier) on cutover.
+ * On lookup we capture Klaviyo's custom properties so we can reuse an existing
+ * `loyalty_card_code` (Rise's identifier — which is the Shopify gift card code)
+ * during cutover.
  */
 
 import { findProfileByEmail, type KlaviyoProfileLookup } from './klaviyo';
@@ -24,17 +25,14 @@ export interface LocalCustomer {
   email: string;
   first_name: string | null;
   last_name: string | null;
-  shopify_customer_id: string | null;
-  shopify_store_credit_account_id: string | null;
-  loyalty_card_code: string | null;
+  shopify_customer_id: string | null;       // unused for orphan gift cards but kept for future
+  shopify_gift_card_id: string | null;      // gid://shopify/GiftCard/...
+  shopify_gift_card_last4: string | null;   // for display
+  loyalty_card_code: string | null;         // = the full Shopify gift card code
   klaviyo_profile_id: string | null;
   total_balance_cached: number;
 }
 
-/**
- * Result of finding or creating a customer. Includes the Klaviyo profile we
- * looked up (if any) so the caller can read existing custom properties.
- */
 export interface CustomerLookupResult {
   customer: LocalCustomer;
   klaviyo: KlaviyoProfileLookup;
@@ -48,12 +46,9 @@ export async function findOrCreateCustomerByEmail(
   const normalizedEmail = email.trim().toLowerCase();
   const supabase = createSupabaseServiceClient();
 
-  // Always look up Klaviyo first so we can pull custom properties (existing
-  // loyalty_card_code, etc.) and gate on Klaviyo presence.
   const klaviyo = await findProfileByEmail(normalizedEmail);
   if (!klaviyo) throw new NotInKlaviyoError(normalizedEmail);
 
-  // Look up locally
   const { data: existing, error: selErr } = await supabase
     .from('customers')
     .select('*')
@@ -62,7 +57,6 @@ export async function findOrCreateCustomerByEmail(
   if (selErr) throw new Error(`DB lookup failed for ${normalizedEmail}: ${selErr.message}`);
   if (existing) return { customer: existing as LocalCustomer, klaviyo };
 
-  // Not local — create using Klaviyo data, falling back to CSV-supplied names
   const firstName = klaviyo.first_name || csvFirstName || null;
   const lastName = klaviyo.last_name || csvLastName || null;
 
