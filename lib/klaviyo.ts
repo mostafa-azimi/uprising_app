@@ -50,16 +50,41 @@ export async function getKlaviyoAccount(): Promise<{ id: string; contact_email?:
 }
 
 // ---------- Profile lookup / upsert ----------
-export async function findProfileByEmail(email: string): Promise<{ id: string; email: string; first_name: string | null; last_name: string | null } | null> {
+export interface KlaviyoProfileLookup {
+  id: string;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+  properties: Record<string, unknown>;
+}
+
+export async function findProfileByEmail(email: string): Promise<KlaviyoProfileLookup | null> {
   const url = new URL(`${BASE}/profiles/`);
   url.searchParams.set('filter', `equals(email,"${email}")`);
-  url.searchParams.set('fields[profile]', 'email,first_name,last_name');
+  url.searchParams.set('fields[profile]', 'email,first_name,last_name,properties');
 
   const res = await fetch(url, { headers: headers(), cache: 'no-store' });
   if (!res.ok) throw new Error(`Klaviyo profiles ${res.status}: ${(await res.text()).slice(0, 300)}`);
-  const json = (await res.json()) as { data: Array<{ id: string; attributes: { email: string; first_name: string | null; last_name: string | null } }> };
+  const json = (await res.json()) as {
+    data: Array<{
+      id: string;
+      attributes: {
+        email: string;
+        first_name: string | null;
+        last_name: string | null;
+        properties?: Record<string, unknown>;
+      };
+    }>;
+  };
   const p = json.data[0];
-  return p ? { id: p.id, email: p.attributes.email, first_name: p.attributes.first_name, last_name: p.attributes.last_name } : null;
+  if (!p) return null;
+  return {
+    id: p.id,
+    email: p.attributes.email,
+    first_name: p.attributes.first_name,
+    last_name: p.attributes.last_name,
+    properties: p.attributes.properties ?? {},
+  };
 }
 
 export async function upsertProfile(args: {

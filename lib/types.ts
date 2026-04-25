@@ -16,13 +16,9 @@ export interface RiseCsvRow {
   note?: string;
 }
 
-export interface ShopifyGiftCard {
-  id: string;          // gid://shopify/GiftCard/...
-  code?: string;       // full code, only on creation
-  maskedCode?: string;
-  lastCharacters?: string;
+export interface ShopifyStoreCreditAccount {
+  id: string;          // gid://shopify/StoreCreditAccount/...
   balance: { amount: string; currencyCode: string };
-  customerId?: string | null;
 }
 
 export interface KlaviyoProfile {

@@ -5,13 +5,11 @@
  * credit. If they're not in Klaviyo, we reject the row with a clear error so
  * the admin knows to upload them to Klaviyo first.
  *
- * Three outcomes per email:
- *   1. Found in our DB and in Klaviyo            → return existing customer
- *   2. Found in Klaviyo, not in our DB           → create local record from Klaviyo data
- *   3. Not found in Klaviyo                      → throw NotInKlaviyoError
+ * On first lookup we capture Klaviyo's custom properties so we can reuse an
+ * existing `loyalty_card_code` (matching Rise's identifier) on cutover.
  */
 
-import { findProfileByEmail } from './klaviyo';
+import { findProfileByEmail, type KlaviyoProfileLookup } from './klaviyo';
 import { createSupabaseServiceClient } from './supabase/server';
 
 export class NotInKlaviyoError extends Error {
@@ -27,41 +25,44 @@ export interface LocalCustomer {
   first_name: string | null;
   last_name: string | null;
   shopify_customer_id: string | null;
-  shopify_gift_card_id: string | null;
-  shopify_gift_card_code: string | null;
-  shopify_gift_card_last4: string | null;
+  shopify_store_credit_account_id: string | null;
+  loyalty_card_code: string | null;
   klaviyo_profile_id: string | null;
   total_balance_cached: number;
 }
 
 /**
- * Find the customer in our DB by email. If absent, look up in Klaviyo;
- * if Klaviyo has them, create a local record. If Klaviyo doesn't have them, throw.
- *
- * Caller (csv processor) catches NotInKlaviyoError and reports the row as failed.
+ * Result of finding or creating a customer. Includes the Klaviyo profile we
+ * looked up (if any) so the caller can read existing custom properties.
  */
+export interface CustomerLookupResult {
+  customer: LocalCustomer;
+  klaviyo: KlaviyoProfileLookup;
+}
+
 export async function findOrCreateCustomerByEmail(
   email: string,
   csvFirstName?: string,
   csvLastName?: string
-): Promise<LocalCustomer> {
+): Promise<CustomerLookupResult> {
   const normalizedEmail = email.trim().toLowerCase();
   const supabase = createSupabaseServiceClient();
 
-  // Look up locally first
+  // Always look up Klaviyo first so we can pull custom properties (existing
+  // loyalty_card_code, etc.) and gate on Klaviyo presence.
+  const klaviyo = await findProfileByEmail(normalizedEmail);
+  if (!klaviyo) throw new NotInKlaviyoError(normalizedEmail);
+
+  // Look up locally
   const { data: existing, error: selErr } = await supabase
     .from('customers')
     .select('*')
     .eq('email', normalizedEmail)
     .maybeSingle();
   if (selErr) throw new Error(`DB lookup failed for ${normalizedEmail}: ${selErr.message}`);
-  if (existing) return existing as LocalCustomer;
+  if (existing) return { customer: existing as LocalCustomer, klaviyo };
 
-  // Not local — must exist in Klaviyo
-  const klaviyo = await findProfileByEmail(normalizedEmail);
-  if (!klaviyo) throw new NotInKlaviyoError(normalizedEmail);
-
-  // Create local record using Klaviyo data, falling back to CSV-supplied names
+  // Not local — create using Klaviyo data, falling back to CSV-supplied names
   const firstName = klaviyo.first_name || csvFirstName || null;
   const lastName = klaviyo.last_name || csvLastName || null;
 
@@ -77,23 +78,19 @@ export async function findOrCreateCustomerByEmail(
     .single();
 
   if (insErr) {
-    // Race: another row in the same upload created this customer concurrently. Re-fetch.
     if (insErr.code === '23505') {
       const { data: again } = await supabase
         .from('customers')
         .select('*')
         .eq('email', normalizedEmail)
         .single();
-      if (again) return again as LocalCustomer;
+      if (again) return { customer: again as LocalCustomer, klaviyo };
     }
     throw new Error(`DB insert failed for ${normalizedEmail}: ${insErr.message}`);
   }
-  return created as LocalCustomer;
+  return { customer: created as LocalCustomer, klaviyo };
 }
 
-/**
- * Update the cached balance on a customer (sum of remaining_amount across active grants).
- */
 export async function recomputeBalance(customerId: string): Promise<number> {
   const supabase = createSupabaseServiceClient();
   const { data, error } = await supabase

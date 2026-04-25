@@ -3,21 +3,23 @@
  *
  * For each row:
  *   1. Find or create local customer (gates on Klaviyo presence)
- *   2. Ensure a Shopify customer exists (link by email, create if missing)
- *   3. Ensure a per-customer Shopify gift card exists (create with $0 if first grant)
- *   4. Apply giftCardCredit for the grant amount
+ *   2. Reuse or generate the synthetic 16-char hex loyalty_card_code (Rise format)
+ *   3. Ensure a Shopify customer exists (link by email, create if missing)
+ *   4. Call storeCreditAccountCredit with expiresAt — Shopify auto-creates
+ *      the store credit account on first call, and natively expires individual
+ *      credit transactions on their expiresAt date
  *   5. Insert the grant + ledger rows
  *   6. Recompute and cache the customer's total balance
  *   7. Push the four Rise-compatible Klaviyo profile properties
  */
 
+import { randomBytes } from 'crypto';
 import { z } from 'zod';
 import { createSupabaseServiceClient } from './supabase/server';
 import {
   findCustomerByEmail as findShopifyCustomer,
   createCustomer as createShopifyCustomer,
-  giftCardCreate,
-  giftCardCredit,
+  storeCreditAccountCredit,
 } from './shopify';
 import { upsertProfile } from './klaviyo';
 import { findOrCreateCustomerByEmail, NotInKlaviyoError, recomputeBalance, type LocalCustomer } from './customers';
@@ -34,17 +36,20 @@ export const RiseRowSchema = z.object({
 });
 export type RiseRow = z.infer<typeof RiseRowSchema>;
 
-// ----- Per-row result types -----
 export type RowResult =
   | { ok: true; rowIndex: number; email: string; grantId: string; amount: number; expiresOn: string; campaignName: string }
   | { ok: false; rowIndex: number; email: string; error: string; reason: 'not_in_klaviyo' | 'shopify_failed' | 'db_failed' | 'invalid' };
 
 // ----- Helpers -----
 function normalizeDate(d: string): string {
-  // Accept MM/DD/YYYY or YYYY-MM-DD; return YYYY-MM-DD
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
   const [m, day, y] = d.split('/');
   return `${y}-${m.padStart(2, '0')}-${day.padStart(2, '0')}`;
+}
+
+/** YYYY-MM-DD → ISO8601 datetime at end-of-day UTC (gives the customer the full day). */
+function toEndOfDayIso(date: string): string {
+  return `${date}T23:59:59Z`;
 }
 
 function splitName(name: string | undefined): { first?: string; last?: string } {
@@ -56,10 +61,11 @@ function splitName(name: string | undefined): { first?: string; last?: string } 
   return { first: parts[0], last: parts.slice(1).join(' ') };
 }
 
-/**
- * Find or create a campaign-level events row (grouping key = note).
- * Memoized in-memory by the caller to avoid duplicate inserts within one upload batch.
- */
+/** Generate a 16-char lowercase hex loyalty card code matching Rise's format. */
+function generateLoyaltyCardCode(): string {
+  return randomBytes(8).toString('hex');
+}
+
 export async function findOrCreateEvent(args: {
   name: string;
   host?: string;
@@ -96,7 +102,8 @@ export async function findOrCreateEvent(args: {
 }
 
 /**
- * Ensure customer has a linked Shopify customer ID. Creates the Shopify customer if missing.
+ * Ensure customer has a linked Shopify customer ID. Creates the Shopify
+ * customer if none exists yet.
  */
 async function ensureShopifyCustomer(c: LocalCustomer): Promise<string> {
   if (c.shopify_customer_id) return c.shopify_customer_id;
@@ -124,53 +131,29 @@ async function ensureShopifyCustomer(c: LocalCustomer): Promise<string> {
 }
 
 /**
- * Apply a grant to the customer's Shopify gift card.
- *  - If no card yet: create one with `amount` as initialValue (Shopify requires > 0).
- *  - If card exists: credit it for `amount`.
- *
- * Returns the gift card identity plus the credit transaction id (null on first-grant create).
+ * Resolve the loyalty_card_code for this customer:
+ *   1. If we already have one in our DB, reuse it
+ *   2. Else if Klaviyo profile already has one (cutover from Rise), reuse it
+ *   3. Else generate a new 16-char hex code and persist
  */
-async function applyGrantToGiftCard(args: {
-  customer: LocalCustomer;
-  shopifyCustomerId: string;
-  amount: number;
-  noteForShopify: string;
-}): Promise<{ id: string; code: string | null; last4: string | null; creditTxnId: string | null }> {
-  const { customer, shopifyCustomerId, amount, noteForShopify } = args;
+async function resolveLoyaltyCardCode(
+  customer: LocalCustomer,
+  klaviyoProperties: Record<string, unknown>
+): Promise<string> {
+  if (customer.loyalty_card_code) return customer.loyalty_card_code;
+
+  const fromKlaviyo = typeof klaviyoProperties.loyalty_card_code === 'string'
+    ? (klaviyoProperties.loyalty_card_code as string).trim()
+    : '';
+  const code = fromKlaviyo || generateLoyaltyCardCode();
+
   const supabase = createSupabaseServiceClient();
-
-  if (customer.shopify_gift_card_id) {
-    // Existing card — credit it
-    const credit = await giftCardCredit(customer.shopify_gift_card_id, amount.toFixed(2), noteForShopify);
-    return {
-      id: customer.shopify_gift_card_id,
-      code: customer.shopify_gift_card_code,
-      last4: customer.shopify_gift_card_last4,
-      creditTxnId: credit.giftCardCreditTransaction?.id ?? null,
-    };
-  }
-
-  // First grant — create the card with the grant amount as initial value
-  const card = await giftCardCreate({
-    initialValue: amount.toFixed(2),
-    customerId: shopifyCustomerId,
-    note: noteForShopify,
-  });
-
-  const code = card.code ?? null;
-  const last4 = card.lastCharacters ?? null;
-
   const { error } = await supabase
     .from('customers')
-    .update({
-      shopify_gift_card_id: card.id,
-      shopify_gift_card_code: code,
-      shopify_gift_card_last4: last4,
-    })
+    .update({ loyalty_card_code: code })
     .eq('id', customer.id);
-  if (error) throw new Error(`customers.shopify_gift_card update: ${error.message}`);
-
-  return { id: card.id, code, last4, creditTxnId: null };
+  if (error) throw new Error(`loyalty_card_code update: ${error.message}`);
+  return code;
 }
 
 /**
@@ -187,47 +170,74 @@ export async function processRiseRow(args: {
   const supabase = createSupabaseServiceClient();
   const { first: csvFirst, last: csvLast } = splitName(row.customer_name);
 
-  let customer: LocalCustomer;
+  // --- 1. Find or create local customer (gates on Klaviyo) ---
+  let lookup: { customer: LocalCustomer; klaviyo: { id: string; properties: Record<string, unknown> } };
   try {
-    customer = await findOrCreateCustomerByEmail(email, csvFirst, csvLast);
+    lookup = await findOrCreateCustomerByEmail(email, csvFirst, csvLast);
   } catch (e) {
     if (e instanceof NotInKlaviyoError) {
       return { ok: false, rowIndex, email, error: e.message, reason: 'not_in_klaviyo' };
     }
     return { ok: false, rowIndex, email, error: (e as Error).message, reason: 'db_failed' };
   }
+  let customer = lookup.customer;
+
+  // --- 2. Resolve loyalty_card_code (reuse Klaviyo's if present) ---
+  let loyaltyCardCode: string;
+  try {
+    loyaltyCardCode = await resolveLoyaltyCardCode(customer, lookup.klaviyo.properties);
+    customer = { ...customer, loyalty_card_code: loyaltyCardCode };
+  } catch (e) {
+    return { ok: false, rowIndex, email, error: (e as Error).message, reason: 'db_failed' };
+  }
 
   const expiresOn = normalizeDate(row.expires_on);
+  const expiresAtIso = toEndOfDayIso(expiresOn);
   const amount = Number(row.adjust_amount);
 
+  // --- 3 & 4. Ensure Shopify customer + apply credit ---
   let shopifyCustomerId: string;
-  let giftCard: { id: string; code: string | null; last4: string | null; creditTxnId: string | null };
-
+  let creditResult;
   try {
     shopifyCustomerId = await ensureShopifyCustomer(customer);
-    giftCard = await applyGrantToGiftCard({
-      customer: { ...customer, shopify_customer_id: shopifyCustomerId },
-      shopifyCustomerId,
-      amount,
-      noteForShopify: `Uprising grant — event:${eventId} — ${row.note || row.reason || ''} — exp:${expiresOn}`,
+    customer = { ...customer, shopify_customer_id: shopifyCustomerId };
+
+    creditResult = await storeCreditAccountCredit({
+      ownerId: shopifyCustomerId,
+      amount: amount.toFixed(2),
+      currencyCode: 'USD',
+      expiresAt: expiresAtIso,
     });
+
+    // Persist the store credit account ID (same on every call for this customer)
+    if (customer.shopify_store_credit_account_id !== creditResult.accountId) {
+      const { error } = await supabase
+        .from('customers')
+        .update({ shopify_store_credit_account_id: creditResult.accountId })
+        .eq('id', customer.id);
+      if (error) throw new Error(`customers.store_credit_account_id update: ${error.message}`);
+    }
   } catch (e) {
     const errMsg = (e as Error).message;
-    const stack = (e as Error).stack ?? '';
     await supabase.from('sync_log').insert({
       target: 'shopify',
-      operation: 'grant_issue',
+      operation: 'storeCreditAccountCredit',
       entity_id: customer.id,
       ok: false,
-      status_code: null,
       error_message: errMsg,
-      request_body: { email, amount, expiresOn, note: row.note, customer_local_id: customer.id, shopify_customer_id: customer.shopify_customer_id, existing_gift_card: customer.shopify_gift_card_id },
-      response_body: { stack: stack.slice(0, 2000) },
+      request_body: {
+        email,
+        amount,
+        expiresAt: expiresAtIso,
+        shopify_customer_id: customer.shopify_customer_id,
+        existing_account_id: customer.shopify_store_credit_account_id,
+      },
+      response_body: { stack: ((e as Error).stack ?? '').slice(0, 2000) },
     });
     return { ok: false, rowIndex, email, error: `Shopify: ${errMsg}`, reason: 'shopify_failed' };
   }
 
-  // Insert grant + ledger
+  // --- 5. Insert grant + ledger ---
   let grantId: string;
   try {
     const { data: grant, error: gErr } = await supabase
@@ -252,7 +262,7 @@ export async function processRiseRow(args: {
       grant_id: grantId,
       type: 'issue',
       amount,
-      shopify_transaction_id: giftCard.creditTxnId,
+      shopify_transaction_id: creditResult.transactionId,
       description: row.note || row.reason || 'Issue',
     });
     if (lErr) throw new Error(lErr.message);
@@ -260,12 +270,11 @@ export async function processRiseRow(args: {
     return { ok: false, rowIndex, email, error: `DB: ${(e as Error).message}`, reason: 'db_failed' };
   }
 
-  // Recompute balance
+  // --- 6. Recompute cached balance ---
   let newBalance = customer.total_balance_cached;
   try {
     newBalance = await recomputeBalance(customer.id);
   } catch (e) {
-    // non-fatal — we already wrote the grant
     await supabase.from('sync_log').insert({
       target: 'shopify',
       operation: 'recompute_balance',
@@ -275,14 +284,14 @@ export async function processRiseRow(args: {
     });
   }
 
-  // Push 4 Rise-compatible Klaviyo properties
+  // --- 7. Push 4 Rise-compatible Klaviyo properties ---
   try {
     await upsertProfile({
       email: customer.email,
       first_name: customer.first_name ?? undefined,
       last_name: customer.last_name ?? undefined,
       properties: {
-        loyalty_card_code: giftCard.code ?? customer.shopify_gift_card_code ?? undefined,
+        loyalty_card_code: loyaltyCardCode,
         loyalty_card_balance: newBalance,
         last_reward: amount,
         expiration_date: expiresOn,
@@ -296,10 +305,9 @@ export async function processRiseRow(args: {
       ok: false,
       error_message: (e as Error).message,
     });
-    // non-fatal — grant is recorded; admin can re-run sync later
   }
 
-  // Bump event aggregates (read-modify-write; fine for single-writer admin uploads)
+  // --- Bump event aggregates (read-modify-write) ---
   try {
     const { data: ev } = await supabase
       .from('events')
@@ -316,7 +324,7 @@ export async function processRiseRow(args: {
         .eq('id', eventId);
     }
   } catch {
-    /* non-fatal — aggregates can be recomputed later from grants */
+    /* non-fatal */
   }
 
   return {

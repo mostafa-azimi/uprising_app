@@ -1,14 +1,21 @@
 /**
  * Shopify Admin GraphQL client.
  * Docs: https://shopify.dev/docs/api/admin-graphql/latest
+ *
+ * This app uses Shopify Store Credit Accounts (the same feature Rise.ai uses)
+ * — reloadable credit per customer with native per-credit expiration.
+ *
+ * Key mutations:
+ *   - storeCreditAccountCredit  — adds credit (auto-creates account on first call)
+ *   - storeCreditAccountDebit   — removes credit (manual adjustments only;
+ *                                  expirations and redemptions are handled by
+ *                                  Shopify natively)
  */
 
-import type { ShopifyGiftCard } from './types';
-
 interface ShopifyConfig {
-  shop: string;        // store-domain.myshopify.com
-  token: string;       // shpat_...
-  apiVersion: string;  // e.g. 2025-10
+  shop: string;
+  token: string;
+  apiVersion: string;
 }
 
 function cfg(): ShopifyConfig {
@@ -22,7 +29,7 @@ function cfg(): ShopifyConfig {
 export interface ShopifyGqlResult<T> {
   data?: T;
   errors?: Array<{ message: string; extensions?: unknown }>;
-  extensions?: { cost?: { requestedQueryCost: number; actualQueryCost: number; throttleStatus: { maximumAvailable: number; currentlyAvailable: number; restoreRate: number } } };
+  extensions?: { cost?: unknown };
 }
 
 export async function shopifyGql<T = unknown>(
@@ -47,7 +54,6 @@ export async function shopifyGql<T = unknown>(
     throw new Error(`Shopify ${res.status}: ${text.slice(0, 800)}`);
   }
   const json = (await res.json()) as ShopifyGqlResult<T>;
-  // Surface top-level GraphQL errors (auth, scope, syntax, missing fields)
   if (json.errors?.length) {
     throw new Error(
       'Shopify GraphQL: ' +
@@ -59,12 +65,11 @@ export async function shopifyGql<T = unknown>(
   return json;
 }
 
-// ---------- Shop info (for connectivity test) ----------
+// ---------- Shop info ----------
 export async function getShopInfo() {
   const r = await shopifyGql<{ shop: { name: string; primaryDomain: { url: string }; currencyCode: string } }>(
     `{ shop { name primaryDomain { url } currencyCode } }`
   );
-  if (r.errors?.length) throw new Error(r.errors.map((e) => e.message).join('; '));
   return r.data!.shop;
 }
 
@@ -78,7 +83,6 @@ export async function findCustomerByEmail(email: string): Promise<{ id: string; 
      }`,
     { q: `email:${email}` }
   );
-  if (r.errors?.length) throw new Error(r.errors.map((e) => e.message).join('; '));
   return r.data?.customers.edges[0]?.node ?? null;
 }
 
@@ -98,116 +102,144 @@ export async function createCustomer(input: { email: string; firstName?: string;
   return r.data.customerCreate.customer;
 }
 
-// ---------- Gift cards ----------
-export async function giftCardCreate(input: {
-  initialValue: string;       // decimal as string e.g. "0.00"
-  customerId?: string;        // gid://shopify/Customer/...
-  expiresOn?: string;         // YYYY-MM-DD
-  note?: string;
-}): Promise<ShopifyGiftCard> {
-  // 2025-04+: full code is on payload (giftCardCode); customerId moved to customer.id
+// ---------- Store credit ----------
+export interface StoreCreditTransactionResult {
+  transactionId: string;
+  accountId: string;
+  newBalance: { amount: string; currencyCode: string };
+  expiresAt: string | null;
+}
+
+/**
+ * Add credit to a customer's store credit account. If the customer has no
+ * account in this currency, Shopify auto-creates one when we pass a Customer
+ * GID as the owner ID.
+ *
+ * @param ownerId      The Customer GID (gid://shopify/Customer/...) or
+ *                     existing StoreCreditAccount GID
+ * @param amount       Decimal as string, e.g. "45.00"
+ * @param currencyCode 3-letter ISO code, default "USD"
+ * @param expiresAt    ISO 8601 datetime, e.g. "2026-10-26T23:59:59Z" (optional)
+ */
+export async function storeCreditAccountCredit(args: {
+  ownerId: string;
+  amount: string;
+  currencyCode?: string;
+  expiresAt?: string;
+}): Promise<StoreCreditTransactionResult> {
+  const { ownerId, amount, expiresAt } = args;
+  const currencyCode = args.currencyCode ?? 'USD';
+
   const r = await shopifyGql<{
-    giftCardCreate: {
-      giftCardCode: string | null;
-      giftCard: {
+    storeCreditAccountCredit: {
+      storeCreditAccountTransaction: {
         id: string;
-        maskedCode?: string;
-        lastCharacters?: string;
-        balance: { amount: string; currencyCode: string };
-        customer: { id: string } | null;
+        amount: { amount: string; currencyCode: string };
+        account: { id: string; balance: { amount: string; currencyCode: string } };
+        expiresAt: string | null;
       } | null;
-      userErrors: Array<{ field: string[]; message: string }>;
+      userErrors: Array<{ field: string[]; message: string; code?: string }>;
     };
   }>(
-    `mutation($input: GiftCardCreateInput!) {
-       giftCardCreate(input: $input) {
-         giftCardCode
-         giftCard {
+    `mutation($id: ID!, $creditInput: StoreCreditAccountCreditInput!) {
+       storeCreditAccountCredit(id: $id, creditInput: $creditInput) {
+         storeCreditAccountTransaction {
            id
-           maskedCode
-           lastCharacters
-           balance { amount currencyCode }
-           customer { id }
+           amount { amount currencyCode }
+           account { id balance { amount currencyCode } }
+           ... on StoreCreditAccountCreditTransaction { expiresAt }
          }
-         userErrors { field message }
+         userErrors { field message code }
        }
      }`,
-    { input }
+    {
+      id: ownerId,
+      creditInput: {
+        creditAmount: { amount, currencyCode },
+        ...(expiresAt ? { expiresAt } : {}),
+      },
+    }
   );
-  const errs = r.data?.giftCardCreate.userErrors ?? [];
-  if (errs.length) throw new Error('giftCardCreate: ' + errs.map((e) => e.message).join('; '));
-  const gc = r.data?.giftCardCreate.giftCard;
-  if (!gc) throw new Error('giftCardCreate returned no card');
+  const errs = r.data?.storeCreditAccountCredit.userErrors ?? [];
+  if (errs.length) {
+    throw new Error('storeCreditAccountCredit: ' + errs.map((e) => `${e.message}${e.code ? ` (${e.code})` : ''}`).join('; '));
+  }
+  const txn = r.data?.storeCreditAccountCredit.storeCreditAccountTransaction;
+  if (!txn) throw new Error('storeCreditAccountCredit returned no transaction');
+
   return {
-    id: gc.id,
-    code: r.data!.giftCardCreate.giftCardCode ?? undefined,
-    maskedCode: gc.maskedCode,
-    lastCharacters: gc.lastCharacters,
-    balance: gc.balance,
-    customerId: gc.customer?.id ?? null,
+    transactionId: txn.id,
+    accountId: txn.account.id,
+    newBalance: txn.account.balance,
+    expiresAt: txn.expiresAt,
   };
 }
 
-export async function giftCardCredit(id: string, amount: string, note?: string) {
-  const r = await shopifyGql<{ giftCardCredit: { giftCardCreditTransaction: { id: string; amount: { amount: string } } | null; giftCard: { id: string; balance: { amount: string } } | null; userErrors: Array<{ field: string[]; message: string }> } }>(
-    `mutation($id: ID!, $creditInput: GiftCardCreditInput!) {
-       giftCardCredit(id: $id, creditInput: $creditInput) {
-         giftCardCreditTransaction { id amount { amount } }
-         giftCard { id balance { amount } }
-         userErrors { field message }
-       }
-     }`,
-    { id, creditInput: { amount, note } }
-  );
-  const errs = r.data?.giftCardCredit.userErrors ?? [];
-  if (errs.length) throw new Error('giftCardCredit: ' + errs.map((e) => e.message).join('; '));
-  return r.data!.giftCardCredit;
-}
-
-export async function giftCardDebit(id: string, amount: string, note?: string) {
-  const r = await shopifyGql<{ giftCardDebit: { giftCardDebitTransaction: { id: string; amount: { amount: string } } | null; giftCard: { id: string; balance: { amount: string } } | null; userErrors: Array<{ field: string[]; message: string }> } }>(
-    `mutation($id: ID!, $debitInput: GiftCardDebitInput!) {
-       giftCardDebit(id: $id, debitInput: $debitInput) {
-         giftCardDebitTransaction { id amount { amount } }
-         giftCard { id balance { amount } }
-         userErrors { field message }
-       }
-     }`,
-    { id, debitInput: { amount, note } }
-  );
-  const errs = r.data?.giftCardDebit.userErrors ?? [];
-  if (errs.length) throw new Error('giftCardDebit: ' + errs.map((e) => e.message).join('; '));
-  return r.data!.giftCardDebit;
-}
-
-export async function getGiftCard(id: string) {
+/**
+ * Debit a customer's store credit account. Used for manual adjustments only;
+ * regular expirations and redemptions are handled by Shopify natively.
+ */
+export async function storeCreditAccountDebit(args: {
+  accountId: string;
+  amount: string;
+  currencyCode?: string;
+}): Promise<{ transactionId: string; newBalance: { amount: string; currencyCode: string } }> {
+  const currencyCode = args.currencyCode ?? 'USD';
   const r = await shopifyGql<{
-    giftCard: {
-      id: string;
-      balance: { amount: string; currencyCode: string };
-      enabled: boolean;
-      expiresOn: string | null;
-      customer: { id: string } | null;
+    storeCreditAccountDebit: {
+      storeCreditAccountTransaction: {
+        id: string;
+        account: { id: string; balance: { amount: string; currencyCode: string } };
+      } | null;
+      userErrors: Array<{ field: string[]; message: string; code?: string }>;
+    };
+  }>(
+    `mutation($id: ID!, $debitInput: StoreCreditAccountDebitInput!) {
+       storeCreditAccountDebit(id: $id, debitInput: $debitInput) {
+         storeCreditAccountTransaction {
+           id
+           account { id balance { amount currencyCode } }
+         }
+         userErrors { field message code }
+       }
+     }`,
+    {
+      id: args.accountId,
+      debitInput: { debitAmount: { amount: args.amount, currencyCode } },
+    }
+  );
+  const errs = r.data?.storeCreditAccountDebit.userErrors ?? [];
+  if (errs.length) {
+    throw new Error('storeCreditAccountDebit: ' + errs.map((e) => `${e.message}${e.code ? ` (${e.code})` : ''}`).join('; '));
+  }
+  const txn = r.data?.storeCreditAccountDebit.storeCreditAccountTransaction;
+  if (!txn) throw new Error('storeCreditAccountDebit returned no transaction');
+
+  return { transactionId: txn.id, newBalance: txn.account.balance };
+}
+
+/**
+ * Get a customer's first store credit account (in any currency, default to USD).
+ * Returns null if the customer has no account yet.
+ */
+export async function getStoreCreditAccountForCustomer(customerId: string, currencyCode = 'USD'): Promise<{ id: string; balance: { amount: string; currencyCode: string } } | null> {
+  const r = await shopifyGql<{
+    customer: {
+      storeCreditAccounts: {
+        edges: Array<{ node: { id: string; balance: { amount: string; currencyCode: string } } }>;
+      };
     } | null;
   }>(
     `query($id: ID!) {
-       giftCard(id: $id) {
-         id
-         balance { amount currencyCode }
-         enabled
-         expiresOn
-         customer { id }
+       customer(id: $id) {
+         storeCreditAccounts(first: 5) {
+           edges { node { id balance { amount currencyCode } } }
+         }
        }
      }`,
-    { id }
+    { id: customerId }
   );
-  const gc = r.data?.giftCard;
-  if (!gc) return null;
-  return {
-    id: gc.id,
-    balance: gc.balance,
-    enabled: gc.enabled,
-    expiresOn: gc.expiresOn,
-    customerId: gc.customer?.id ?? null,
-  };
+  const accounts = r.data?.customer?.storeCreditAccounts.edges ?? [];
+  const match = accounts.find((e) => e.node.balance.currencyCode === currencyCode);
+  return match ? match.node : null;
 }
