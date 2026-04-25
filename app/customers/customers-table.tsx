@@ -208,15 +208,19 @@ export function CustomersTable({
                     />
                   </td>
                   <td className="py-2 px-4">
-                    <a
-                      href={klaviyoLinkHref(c)}
-                      target="_blank"
-                      rel="noreferrer"
-                      title="Open in Klaviyo"
-                      className="font-medium text-ink hover:underline"
-                    >
-                      {c.email}
-                    </a>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-medium">{c.email}</span>
+                      <a
+                        href={klaviyoLinkHref(c)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Open in Klaviyo"
+                        aria-label={`Open ${c.email} in Klaviyo`}
+                        className="inline-flex items-center justify-center w-5 h-5 rounded border border-line bg-white text-xs text-muted hover:text-ink hover:border-ink"
+                      >
+                        ↗
+                      </a>
+                    </div>
                     <div className="text-xs text-muted">
                       {[c.first_name, c.last_name].filter(Boolean).join(' ') || '—'}
                     </div>
