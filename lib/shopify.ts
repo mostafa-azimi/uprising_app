@@ -149,17 +149,25 @@ export interface GiftCardCreditResult {
 
 /** Add balance to an existing gift card. Used on every grant after the first. */
 export async function giftCardCredit(id: string, amount: string, note?: string): Promise<GiftCardCreditResult> {
+  // 2025-04+: GiftCardCreditPayload no longer has a top-level `giftCard` field.
+  // The gift card is reached through the transaction.
   const r = await shopifyGql<{
     giftCardCredit: {
-      giftCardCreditTransaction: { id: string; amount: { amount: string } } | null;
-      giftCard: { id: string; balance: { amount: string; currencyCode: string } } | null;
+      giftCardCreditTransaction: {
+        id: string;
+        amount: { amount: string };
+        giftCard: { id: string; balance: { amount: string; currencyCode: string } } | null;
+      } | null;
       userErrors: Array<{ field: string[]; message: string }>;
     };
   }>(
     `mutation($id: ID!, $creditInput: GiftCardCreditInput!) {
        giftCardCredit(id: $id, creditInput: $creditInput) {
-         giftCardCreditTransaction { id amount { amount } }
-         giftCard { id balance { amount currencyCode } }
+         giftCardCreditTransaction {
+           id
+           amount { amount }
+           giftCard { id balance { amount currencyCode } }
+         }
          userErrors { field message }
        }
      }`,
@@ -167,9 +175,11 @@ export async function giftCardCredit(id: string, amount: string, note?: string):
   );
   const errs = r.data?.giftCardCredit.userErrors ?? [];
   if (errs.length) throw new Error('giftCardCredit: ' + errs.map((e) => e.message).join('; '));
+  const txn = r.data?.giftCardCredit.giftCardCreditTransaction;
+  if (!txn?.giftCard) throw new Error('giftCardCredit returned no transaction or gift card');
   return {
-    transactionId: r.data?.giftCardCredit.giftCardCreditTransaction?.id ?? null,
-    newBalance: r.data!.giftCardCredit.giftCard!.balance,
+    transactionId: txn.id,
+    newBalance: txn.giftCard.balance,
   };
 }
 
@@ -177,15 +187,21 @@ export async function giftCardCredit(id: string, amount: string, note?: string):
 export async function giftCardDebit(id: string, amount: string, note?: string): Promise<GiftCardCreditResult> {
   const r = await shopifyGql<{
     giftCardDebit: {
-      giftCardDebitTransaction: { id: string; amount: { amount: string } } | null;
-      giftCard: { id: string; balance: { amount: string; currencyCode: string } } | null;
+      giftCardDebitTransaction: {
+        id: string;
+        amount: { amount: string };
+        giftCard: { id: string; balance: { amount: string; currencyCode: string } } | null;
+      } | null;
       userErrors: Array<{ field: string[]; message: string }>;
     };
   }>(
     `mutation($id: ID!, $debitInput: GiftCardDebitInput!) {
        giftCardDebit(id: $id, debitInput: $debitInput) {
-         giftCardDebitTransaction { id amount { amount } }
-         giftCard { id balance { amount currencyCode } }
+         giftCardDebitTransaction {
+           id
+           amount { amount }
+           giftCard { id balance { amount currencyCode } }
+         }
          userErrors { field message }
        }
      }`,
@@ -193,9 +209,11 @@ export async function giftCardDebit(id: string, amount: string, note?: string): 
   );
   const errs = r.data?.giftCardDebit.userErrors ?? [];
   if (errs.length) throw new Error('giftCardDebit: ' + errs.map((e) => e.message).join('; '));
+  const txn = r.data?.giftCardDebit.giftCardDebitTransaction;
+  if (!txn?.giftCard) throw new Error('giftCardDebit returned no transaction or gift card');
   return {
-    transactionId: r.data?.giftCardDebit.giftCardDebitTransaction?.id ?? null,
-    newBalance: r.data!.giftCardDebit.giftCard!.balance,
+    transactionId: txn.id,
+    newBalance: txn.giftCard.balance,
   };
 }
 
