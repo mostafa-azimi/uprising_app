@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { CopyButton } from '@/components/copy-button';
+import { CustomerActions } from './customer-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -123,6 +124,12 @@ export default async function CustomerDetail({ params }: { params: Params }) {
           )}
         </div>
       </section>
+
+      <CustomerActions
+        customerId={customer.id}
+        email={customer.email}
+        currentBalance={Number(customer.total_balance_cached ?? 0)}
+      />
 
       {/* Active grants */}
       <h2 className="text-xl font-semibold mb-3">Active grants ({activeGrants.length})</h2>

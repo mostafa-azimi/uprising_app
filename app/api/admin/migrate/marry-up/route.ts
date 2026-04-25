@@ -69,6 +69,7 @@ export async function POST() {
       last_name: r.last_name,
       klaviyo_profile_id: r.klaviyo_profile_id,
       loyalty_card_code: r.loyalty_card_code,
+      expiration_date: r.expiration_date,
       total_balance_cached: Number(r.loyalty_card_balance ?? 0),
     }));
 

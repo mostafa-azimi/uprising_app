@@ -298,7 +298,7 @@ export async function processRiseRow(args: {
     return { ok: false, rowIndex, email, error: `DB: ${(e as Error).message}`, reason: 'db_failed' };
   }
 
-  // --- 5. Recompute cached balance ---
+  // --- 5. Recompute cached balance + sync customers.expiration_date ---
   let newBalance = customer.total_balance_cached;
   try {
     newBalance = await recomputeBalance(customer.id);
@@ -311,6 +311,12 @@ export async function processRiseRow(args: {
       error_message: (e as Error).message,
     });
   }
+
+  // Update the customer's denormalized expiration_date to this newest grant's expires_on
+  await supabase
+    .from('customers')
+    .update({ expiration_date: expiresOn })
+    .eq('id', customer.id);
 
   // --- 6. Push 4 Rise-compatible Klaviyo properties ---
   try {
