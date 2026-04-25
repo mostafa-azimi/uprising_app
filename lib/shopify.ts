@@ -230,37 +230,30 @@ export async function getGiftCard(id: string) {
  *
  * For a store with N gift cards, this issues ceil(N/250) GraphQL queries.
  */
-export async function paginateAllGiftCards(maxPages = 200): Promise<Array<{
+export interface PaginatedGiftCardNode {
   id: string;
   lastCharacters: string | null;
   maskedCode: string | null;
   enabled: boolean;
   balance: { amount: string; currencyCode: string };
   expiresOn: string | null;
-}>> {
-  type Node = {
-    id: string;
-    lastCharacters: string | null;
-    maskedCode: string | null;
-    enabled: boolean;
-    balance: { amount: string; currencyCode: string };
-    expiresOn: string | null;
-  };
+}
 
-  const all: Node[] = [];
+interface PaginatedGiftCardsResponse {
+  giftCards: {
+    edges: Array<{ cursor: string; node: PaginatedGiftCardNode }>;
+    pageInfo: { hasNextPage: boolean; endCursor: string | null };
+  };
+}
+
+export async function paginateAllGiftCards(maxPages = 200): Promise<PaginatedGiftCardNode[]> {
+  const all: PaginatedGiftCardNode[] = [];
   let cursor: string | null = null;
   let pages = 0;
 
-  while (true) {
+  while (pages < maxPages) {
     pages++;
-    if (pages > maxPages) break;
-
-    const r = await shopifyGql<{
-      giftCards: {
-        edges: Array<{ cursor: string; node: Node }>;
-        pageInfo: { hasNextPage: boolean; endCursor: string | null };
-      };
-    }>(
+    const r: ShopifyGqlResult<PaginatedGiftCardsResponse> = await shopifyGql<PaginatedGiftCardsResponse>(
       `query($cursor: String) {
          giftCards(first: 250, after: $cursor) {
            edges {
@@ -297,27 +290,29 @@ export async function paginateAllGiftCards(maxPages = 200): Promise<Array<{
  * Tries multiple search-syntax variants for resilience across API versions
  * (older versions accept `code:`, newer accept `last_characters:`).
  */
-export async function findGiftCardsByLast4(last4: string) {
-  type Node = {
-    id: string;
-    maskedCode: string | null;
-    lastCharacters: string | null;
-    balance: { amount: string; currencyCode: string };
-    enabled: boolean;
-  };
+export interface GiftCardSearchNode {
+  id: string;
+  maskedCode: string | null;
+  lastCharacters: string | null;
+  balance: { amount: string; currencyCode: string };
+  enabled: boolean;
+}
 
+interface GiftCardSearchResponse {
+  giftCards: { edges: Array<{ node: GiftCardSearchNode }> };
+}
+
+export async function findGiftCardsByLast4(last4: string): Promise<GiftCardSearchNode[]> {
   const tries = [
     `last_characters:${last4}`,
     `code:${last4}`,
     `last_characters:'${last4}'`,
   ];
 
-  const seen = new Map<string, Node>();
+  const seen = new Map<string, GiftCardSearchNode>();
   for (const q of tries) {
     try {
-      const r = await shopifyGql<{
-        giftCards: { edges: Array<{ node: Node }> };
-      }>(
+      const r: ShopifyGqlResult<GiftCardSearchResponse> = await shopifyGql<GiftCardSearchResponse>(
         `query($q: String!) {
            giftCards(first: 50, query: $q) {
              edges { node { id maskedCode lastCharacters balance { amount currencyCode } enabled } }
@@ -336,9 +331,7 @@ export async function findGiftCardsByLast4(last4: string) {
 
   // As a last resort: empty query (returns most-recent cards) and filter client-side
   if (seen.size === 0) {
-    const r = await shopifyGql<{
-      giftCards: { edges: Array<{ node: Node }> };
-    }>(
+    const r: ShopifyGqlResult<GiftCardSearchResponse> = await shopifyGql<GiftCardSearchResponse>(
       `query { giftCards(first: 250) { edges { node { id maskedCode lastCharacters balance { amount currencyCode } enabled } } } }`
     );
     for (const e of r.data?.giftCards.edges ?? []) {
