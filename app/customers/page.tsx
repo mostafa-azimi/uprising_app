@@ -26,7 +26,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
 
   let query = supabase
     .from('customers')
-    .select('id, email, first_name, last_name, total_balance_cached, loyalty_card_code, shopify_store_credit_account_id, created_at, updated_at');
+    .select('id, email, first_name, last_name, total_balance_cached, loyalty_card_code, shopify_gift_card_id, shopify_gift_card_last4, created_at, updated_at');
 
   if (q) {
     query = query.ilike('email', `%${q}%`);
