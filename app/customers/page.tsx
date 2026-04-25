@@ -5,7 +5,9 @@ import { SubmitButton } from '@/components/submit-button';
 
 export const dynamic = 'force-dynamic';
 
-interface SearchParams { q?: string; sort?: string }
+interface SearchParams { q?: string; sort?: string; page?: string }
+
+const PAGE_SIZE = 100;
 
 function fmtRelative(iso: string | null | undefined) {
   if (!iso) return '—';
@@ -23,10 +25,12 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
   const supabase = createSupabaseServerClient();
   const q = (searchParams.q ?? '').trim().toLowerCase();
   const sort = searchParams.sort ?? 'recent_activity';
+  const page = Math.max(1, parseInt(searchParams.page ?? '1', 10) || 1);
+  const offset = (page - 1) * PAGE_SIZE;
 
   let query = supabase
     .from('customers')
-    .select('id, email, first_name, last_name, total_balance_cached, loyalty_card_code, shopify_gift_card_id, shopify_gift_card_last4, created_at, updated_at');
+    .select('id, email, first_name, last_name, total_balance_cached, loyalty_card_code, shopify_gift_card_id, shopify_gift_card_last4, created_at, updated_at', { count: 'exact' });
 
   if (q) {
     query = query.ilike('email', `%${q}%`);
@@ -43,7 +47,9 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
   const s = sorts[sort] ?? sorts.recent_activity;
   query = query.order(s.col, { ascending: s.ascending });
 
-  const { data: customers, error } = await query.limit(200);
+  const { data: customers, error, count } = await query.range(offset, offset + PAGE_SIZE - 1);
+  const totalCount = count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   // Grant counts in a separate query
   const ids = (customers ?? []).map((c) => c.id);
@@ -65,7 +71,9 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
     <main className="min-h-screen px-8 py-10 max-w-6xl mx-auto">
       <Link href="/dashboard" className="text-sm text-muted hover:text-ink">← Dashboard</Link>
       <h1 className="text-3xl font-bold mt-2 mb-1">Customers</h1>
-      <p className="text-sm text-muted mb-6">{customers?.length ?? 0} customers loaded.</p>
+      <p className="text-sm text-muted mb-6">
+        {totalCount} total · showing {offset + 1}–{Math.min(offset + PAGE_SIZE, totalCount)} on page {page} of {totalPages}
+      </p>
 
       <form className="flex flex-wrap gap-3 mb-6">
         <input
@@ -152,6 +160,31 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
           </table>
         </div>
       )}
+
+      {totalPages > 1 && (
+        <nav className="mt-6 flex items-center justify-between text-sm">
+          <PageLink page={page - 1} disabled={page <= 1} q={q} sort={sort}>← Previous</PageLink>
+          <span className="text-muted">Page {page} of {totalPages}</span>
+          <PageLink page={page + 1} disabled={page >= totalPages} q={q} sort={sort}>Next →</PageLink>
+        </nav>
+      )}
     </main>
+  );
+}
+
+function PageLink({ page, disabled, q, sort, children }: {
+  page: number; disabled: boolean; q: string; sort: string; children: React.ReactNode;
+}) {
+  if (disabled) {
+    return <span className="text-muted opacity-50 cursor-not-allowed">{children}</span>;
+  }
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (sort) params.set('sort', sort);
+  params.set('page', String(page));
+  return (
+    <Link href={`/customers?${params.toString()}`} className="text-ink hover:underline font-medium">
+      {children}
+    </Link>
   );
 }
