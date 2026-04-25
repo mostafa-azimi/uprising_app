@@ -59,6 +59,11 @@ export default async function DashboardPage() {
           <h2 className="font-semibold mb-1">Events</h2>
           <p className="text-sm text-muted">Coming soon: campaign history and exports.</p>
         </div>
+
+        <Link href="/admin/migrate" className="block p-6 border border-line rounded-xl bg-white hover:border-ink transition sm:col-span-2">
+          <h2 className="font-semibold mb-1">Migrate from Rise</h2>
+          <p className="text-sm text-muted">One-time tool: upload Shopify gift cards + Klaviyo profiles, marry them up to populate customer roster.</p>
+        </Link>
       </section>
     </main>
   );

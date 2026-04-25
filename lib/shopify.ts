@@ -222,6 +222,76 @@ export async function getGiftCard(id: string) {
 }
 
 /**
+ * Paginate through ALL gift cards in the Shopify store. Used for the bulk-link
+ * tool that matches existing Rise gift cards to our customers by last 4 of code.
+ *
+ * Returns an array of cards with their id, lastCharacters, enabled flag, and balance.
+ * Ordered newest-first by Shopify default. Stops when hasNextPage is false.
+ *
+ * For a store with N gift cards, this issues ceil(N/250) GraphQL queries.
+ */
+export async function paginateAllGiftCards(maxPages = 200): Promise<Array<{
+  id: string;
+  lastCharacters: string | null;
+  maskedCode: string | null;
+  enabled: boolean;
+  balance: { amount: string; currencyCode: string };
+  expiresOn: string | null;
+}>> {
+  type Node = {
+    id: string;
+    lastCharacters: string | null;
+    maskedCode: string | null;
+    enabled: boolean;
+    balance: { amount: string; currencyCode: string };
+    expiresOn: string | null;
+  };
+
+  const all: Node[] = [];
+  let cursor: string | null = null;
+  let pages = 0;
+
+  while (true) {
+    pages++;
+    if (pages > maxPages) break;
+
+    const r = await shopifyGql<{
+      giftCards: {
+        edges: Array<{ cursor: string; node: Node }>;
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    }>(
+      `query($cursor: String) {
+         giftCards(first: 250, after: $cursor) {
+           edges {
+             cursor
+             node {
+               id
+               lastCharacters
+               maskedCode
+               enabled
+               balance { amount currencyCode }
+               expiresOn
+             }
+           }
+           pageInfo { hasNextPage endCursor }
+         }
+       }`,
+      { cursor }
+    );
+
+    const edges = r.data?.giftCards.edges ?? [];
+    all.push(...edges.map((e) => e.node));
+
+    const info = r.data?.giftCards.pageInfo;
+    if (!info?.hasNextPage || !info.endCursor) break;
+    cursor = info.endCursor;
+  }
+
+  return all;
+}
+
+/**
  * Search Shopify for gift cards by the last 4 characters of the code.
  *
  * Tries multiple search-syntax variants for resilience across API versions
