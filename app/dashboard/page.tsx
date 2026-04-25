@@ -41,10 +41,10 @@ export default async function DashboardPage() {
           <h2 className="font-semibold mb-1">Test connections</h2>
           <p className="text-sm text-muted">Verify Supabase, Shopify, and Klaviyo are reachable and configured correctly.</p>
         </Link>
-        <div className="block p-6 border border-line rounded-xl bg-white opacity-60">
+        <Link href="/upload/grants" className="block p-6 border border-line rounded-xl bg-white hover:border-ink transition">
           <h2 className="font-semibold mb-1">Upload event credits</h2>
-          <p className="text-sm text-muted">Coming next: bulk grant CSV upload (file 2 replacement).</p>
-        </div>
+          <p className="text-sm text-muted">Drop a Rise-format CSV. Each row issues a grant, updates Shopify, and syncs Klaviyo properties.</p>
+        </Link>
         <div className="block p-6 border border-line rounded-xl bg-white opacity-60">
           <h2 className="font-semibold mb-1">Customers</h2>
           <p className="text-sm text-muted">Coming soon: search, balances, edit grants.</p>
