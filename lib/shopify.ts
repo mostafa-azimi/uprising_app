@@ -44,9 +44,19 @@ export async function shopifyGql<T = unknown>(
 
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Shopify ${res.status}: ${text.slice(0, 500)}`);
+    throw new Error(`Shopify ${res.status}: ${text.slice(0, 800)}`);
   }
-  return (await res.json()) as ShopifyGqlResult<T>;
+  const json = (await res.json()) as ShopifyGqlResult<T>;
+  // Surface top-level GraphQL errors (auth, scope, syntax, missing fields)
+  if (json.errors?.length) {
+    throw new Error(
+      'Shopify GraphQL: ' +
+        json.errors
+          .map((e) => `${e.message}${e.extensions ? ' [' + JSON.stringify(e.extensions) + ']' : ''}`)
+          .join('; ')
+    );
+  }
+  return json;
 }
 
 // ---------- Shop info (for connectivity test) ----------

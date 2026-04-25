@@ -201,16 +201,19 @@ export async function processRiseRow(args: {
     );
     creditTxnId = credit.giftCardCreditTransaction?.id ?? null;
   } catch (e) {
+    const errMsg = (e as Error).message;
+    const stack = (e as Error).stack ?? '';
     await supabase.from('sync_log').insert({
       target: 'shopify',
       operation: 'grant_issue',
       entity_id: customer.id,
       ok: false,
       status_code: null,
-      error_message: (e as Error).message,
-      request_body: { email, amount, expiresOn, note: row.note },
+      error_message: errMsg,
+      request_body: { email, amount, expiresOn, note: row.note, customer_local_id: customer.id, shopify_customer_id: customer.shopify_customer_id, existing_gift_card: customer.shopify_gift_card_id },
+      response_body: { stack: stack.slice(0, 2000) },
     });
-    return { ok: false, rowIndex, email, error: `Shopify: ${(e as Error).message}`, reason: 'shopify_failed' };
+    return { ok: false, rowIndex, email, error: `Shopify: ${errMsg}`, reason: 'shopify_failed' };
   }
 
   // Insert grant + ledger
