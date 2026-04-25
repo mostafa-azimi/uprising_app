@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { CopyButton } from '@/components/copy-button';
+import { SubmitButton } from '@/components/submit-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -85,7 +86,9 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
           <option value="email_desc">Email (Z → A)</option>
           <option value="created_desc">Recently added</option>
         </select>
-        <button className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-medium">Apply</button>
+        <SubmitButton className="px-4 py-2 rounded-lg text-sm font-medium" pendingLabel="Applying…">
+          Apply
+        </SubmitButton>
       </form>
 
       {error ? (
