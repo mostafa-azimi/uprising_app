@@ -19,11 +19,15 @@ export default function UploadGrantsPage() {
 
   function submit() {
     if (!file) return;
+    if (!eventName.trim()) {
+      setTopError('Event name is required.');
+      return;
+    }
     setTopError(null);
     setOutcome(null);
     const fd = new FormData();
     fd.append('csv', file);
-    if (eventName.trim()) fd.append('eventName', eventName.trim());
+    fd.append('eventName', eventName.trim());
     startTransition(async () => {
       try {
         const res = await processGrantsUpload(fd);
@@ -39,22 +43,24 @@ export default function UploadGrantsPage() {
       <Link href="/dashboard" className="text-sm text-muted hover:text-ink">← Dashboard</Link>
       <h1 className="text-3xl font-bold mt-2 mb-1">Upload event credits</h1>
       <p className="text-sm text-muted mb-8">
-        CSV with columns: <code>code, adjust_amount, expires_on, customer_name, customer_email, reason, note</code>.
-        Each unique <code>note</code> becomes a campaign. Customers must already exist in Klaviyo.
+        Each upload is a single event you'll be able to look up later (e.g. <code>2026-04-28 — NADGT CO Premier</code>).
+        CSV columns: <code>code, adjust_amount, expires_on, customer_name, customer_email, reason, note</code>.
+        Customers must already exist in Klaviyo.
       </p>
 
       <div className="border border-line rounded-xl bg-white p-6 mb-6 space-y-5">
         <label className="block">
-          <span className="text-sm font-medium">Event name <span className="text-muted font-normal">(optional)</span></span>
+          <span className="text-sm font-medium">Event name <span className="text-bad font-normal">*</span></span>
           <input
             type="text"
             value={eventName}
             onChange={(e) => setEventName(e.target.value)}
-            placeholder='e.g. "NADGT - April 18-19 2026"'
+            placeholder='e.g. "2026-04-28 — NADGT CO Premier"'
+            required
             className="mt-1 block w-full border border-line rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ink"
           />
           <span className="text-xs text-muted mt-1 block">
-            If set, all rows in this upload roll into one event with this name. If left blank, rows are grouped by their <code>note</code> column.
+            Required. Every upload becomes its own event you can look up historically. Use the date plus context (e.g. weekly tournament name) so it's findable later.
           </span>
         </label>
 
@@ -77,8 +83,8 @@ export default function UploadGrantsPage() {
 
         <button
           onClick={submit}
-          disabled={!file || isPending}
-          className="bg-ink text-white px-5 py-2 rounded-lg font-medium disabled:opacity-50"
+          disabled={!file || !eventName.trim() || isPending}
+          className="bg-ink text-white px-5 py-2 rounded-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isPending ? 'Processing… (this may take a minute)' : 'Process upload'}
         </button>

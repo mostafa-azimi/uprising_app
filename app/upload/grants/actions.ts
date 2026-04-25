@@ -1,15 +1,41 @@
 'use server';
 
 import Papa from 'papaparse';
-import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { createSupabaseServerClient, createSupabaseServiceClient } from '@/lib/supabase/server';
 import {
   RiseRowSchema,
-  groupRowsByCampaign,
-  findOrCreateEvent,
   processRiseRow,
   type RowResult,
   type RiseRow,
 } from '@/lib/grants';
+
+/**
+ * Always create a fresh event row per upload — each upload is treated as its
+ * own historical event by admins, even if names collide.
+ */
+async function createNewEvent(args: {
+  name: string;
+  host?: string;
+  uploadedBy?: string;
+  sourceFilename?: string;
+}): Promise<string> {
+  const supabase = createSupabaseServiceClient();
+  const { data, error } = await supabase
+    .from('events')
+    .insert({
+      name: args.name,
+      host: args.host,
+      uploaded_by: args.uploadedBy,
+      source_filename: args.sourceFilename,
+      total_grants_count: 0,
+      total_grants_amount: 0,
+      status: 'completed',
+    })
+    .select('id')
+    .single();
+  if (error) throw new Error(`event insert: ${error.message}`);
+  return data.id;
+}
 
 export interface UploadOutcome {
   ok: boolean;
@@ -40,9 +66,12 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
   const user = await requireAdmin();
 
   const file = formData.get('csv') as File | null;
-  const explicitEventName = (formData.get('eventName') as string | null)?.trim() || '';
+  const eventName = (formData.get('eventName') as string | null)?.trim() || '';
   if (!file) {
     return { ok: false, totalRows: 0, succeeded: 0, failed: 0, totalAmount: 0, results: [], campaigns: [], message: 'No file provided' };
+  }
+  if (!eventName) {
+    return { ok: false, totalRows: 0, succeeded: 0, failed: 0, totalAmount: 0, results: [], campaigns: [], message: 'Event name is required' };
   }
 
   const csvText = await file.text();
@@ -92,38 +121,20 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
     };
   }
 
-  // Determine event grouping: if user provided an explicit name, all rows go
-  // into one event. Otherwise group by `note` column (existing behavior).
-  const justRows = validRows.map((v) => v.row);
-  const campaignRecords: Array<{ name: string; eventId: string; rowCount: number }> = [];
-  const eventIdByCampaign = new Map<string, string>();
-
-  if (explicitEventName) {
-    // Single event for the whole upload. findOrCreateEvent merges by exact
-    // name — so re-uploading with the same name extends the same event,
-    // which matches our re-upload regression test behavior.
-    const host = explicitEventName.includes(' - ') ? explicitEventName.split(' - ')[0] : undefined;
-    const eventId = await findOrCreateEvent({
-      name: explicitEventName,
-      host,
-      uploadedBy: user.id,
-      sourceFilename: file.name,
-    });
-    eventIdByCampaign.set('__all__', eventId);
-    campaignRecords.push({ name: explicitEventName, eventId, rowCount: validRows.length });
-  } else {
-    const groups = groupRowsByCampaign(justRows);
-    for (const [campaignName, group] of groups.entries()) {
-      const eventId = await findOrCreateEvent({
-        name: campaignName,
-        host: group.host,
-        uploadedBy: user.id,
-        sourceFilename: file.name,
-      });
-      eventIdByCampaign.set(campaignName, eventId);
-      campaignRecords.push({ name: campaignName, eventId, rowCount: group.rows.length });
-    }
-  }
+  // Each upload is one event named by the admin. We always create a new event
+  // row for each upload (timestamped), so re-uploading the same name doesn't
+  // merge into a prior import — admins use unique names per upload (e.g.
+  // "April 28 - NADGT CO Premier") and want each as a distinct historical event.
+  const host = eventName.includes(' - ') ? eventName.split(' - ')[0] : undefined;
+  const eventId = await createNewEvent({
+    name: eventName,
+    host,
+    uploadedBy: user.id,
+    sourceFilename: file.name,
+  });
+  const campaignRecords: Array<{ name: string; eventId: string; rowCount: number }> = [
+    { name: eventName, eventId, rowCount: validRows.length },
+  ];
 
   // Process rows sequentially (rate-limit safe)
   const results: RowResult[] = [...earlyFailures];
@@ -131,9 +142,6 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
   let totalAmount = 0;
 
   for (const { row, rowIndex } of validRows) {
-    const eventId = explicitEventName
-      ? eventIdByCampaign.get('__all__')!
-      : eventIdByCampaign.get((row.note || row.reason || 'Untitled').trim())!;
     const result = await processRiseRow({ rowIndex, row, eventId, uploadedBy: user.id });
     results.push(result);
     if (result.ok) {
