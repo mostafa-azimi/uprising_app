@@ -31,12 +31,23 @@ export async function POST() {
   if (kErr) {
     return NextResponse.json({ error: `klaviyo staging read: ${kErr.message}` }, { status: 500 });
   }
-  const { data: shopifyRows, error: sErr } = await supabase
-    .from('shopify_gift_cards_staging')
-    .select('id, last_characters, current_balance, enabled')
-    .eq('enabled', true);
-  if (sErr) {
-    return NextResponse.json({ error: `shopify staging read: ${sErr.message}` }, { status: 500 });
+  // Paginate — Supabase/PostgREST default max-rows is 1,000.
+  const shopifyRows: Array<{ id: number; last_characters: string | null; current_balance: number | null; enabled: boolean }> = [];
+  const PAGE = 1000;
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('shopify_gift_cards_staging')
+      .select('id, last_characters, current_balance, enabled')
+      .eq('enabled', true)
+      .range(from, from + PAGE - 1);
+    if (error) {
+      return NextResponse.json({ error: `shopify staging read: ${error.message}` }, { status: 500 });
+    }
+    if (!data || data.length === 0) break;
+    shopifyRows.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
   }
 
   // ----- 2. Build last4 → cards map -------------------------------------
@@ -73,14 +84,23 @@ export async function POST() {
   }
 
   // ----- 4. Link gift cards by last 4 -----------------------------------
-  // Pull all customers with a code that aren't yet linked
-  const { data: needsLink, error: nlErr } = await supabase
-    .from('customers')
-    .select('id, email, loyalty_card_code')
-    .not('loyalty_card_code', 'is', null)
-    .is('shopify_gift_card_id', null);
-  if (nlErr) {
-    return NextResponse.json({ error: `unlinked customers fetch: ${nlErr.message}` }, { status: 500 });
+  // Pull all customers with a code that aren't yet linked (paginated)
+  const needsLink: Array<{ id: string; email: string; loyalty_card_code: string | null }> = [];
+  let nlFrom = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('customers')
+      .select('id, email, loyalty_card_code')
+      .not('loyalty_card_code', 'is', null)
+      .is('shopify_gift_card_id', null)
+      .range(nlFrom, nlFrom + PAGE - 1);
+    if (error) {
+      return NextResponse.json({ error: `unlinked customers fetch: ${error.message}` }, { status: 500 });
+    }
+    if (!data || data.length === 0) break;
+    needsLink.push(...data);
+    if (data.length < PAGE) break;
+    nlFrom += PAGE;
   }
 
   const result: MarryUpResult = {
