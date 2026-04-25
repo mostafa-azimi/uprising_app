@@ -1,0 +1,59 @@
+import Link from 'next/link';
+import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { signOut } from '@/app/login/actions';
+
+export default async function DashboardPage() {
+  const supabase = createSupabaseServerClient();
+  const { data: { user } } = await supabase.auth.getUser();
+
+  // Check admin gate
+  const { data: admin } = await supabase
+    .from('admin_users')
+    .select('user_id')
+    .eq('user_id', user?.id ?? '')
+    .maybeSingle();
+
+  const isAdmin = !!admin;
+
+  return (
+    <main className="min-h-screen px-8 py-10 max-w-5xl mx-auto">
+      <header className="flex items-baseline justify-between mb-10">
+        <div>
+          <h1 className="text-3xl font-bold">Uprising</h1>
+          <p className="text-sm text-muted">Store credit manager · Signed in as {user?.email}</p>
+        </div>
+        <form action={signOut}>
+          <button className="text-sm text-muted hover:text-ink">Sign out</button>
+        </form>
+      </header>
+
+      {!isAdmin && (
+        <div className="mb-8 p-4 rounded-lg border border-warn bg-yellow-50 text-sm">
+          <strong>Admin access not yet granted.</strong> You're signed in but not in the
+          <code className="mx-1 px-1 bg-white rounded">admin_users</code> table. Run the SQL
+          snippet at the bottom of <code>supabase/migrations/0001_initial_schema.sql</code>
+          to grant yourself access, then reload.
+        </div>
+      )}
+
+      <section className="grid sm:grid-cols-2 gap-4">
+        <Link href="/test-connections" className="block p-6 border border-line rounded-xl bg-white hover:border-ink transition">
+          <h2 className="font-semibold mb-1">Test connections</h2>
+          <p className="text-sm text-muted">Verify Supabase, Shopify, and Klaviyo are reachable and configured correctly.</p>
+        </Link>
+        <div className="block p-6 border border-line rounded-xl bg-white opacity-60">
+          <h2 className="font-semibold mb-1">Upload event credits</h2>
+          <p className="text-sm text-muted">Coming next: bulk grant CSV upload (file 2 replacement).</p>
+        </div>
+        <div className="block p-6 border border-line rounded-xl bg-white opacity-60">
+          <h2 className="font-semibold mb-1">Customers</h2>
+          <p className="text-sm text-muted">Coming soon: search, balances, edit grants.</p>
+        </div>
+        <div className="block p-6 border border-line rounded-xl bg-white opacity-60">
+          <h2 className="font-semibold mb-1">Events</h2>
+          <p className="text-sm text-muted">Coming soon: campaign history and exports.</p>
+        </div>
+      </section>
+    </main>
+  );
+}
