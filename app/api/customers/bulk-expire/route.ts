@@ -33,14 +33,25 @@ export async function POST(request: NextRequest) {
   let succeeded = 0;
   let failed = 0;
 
-  for (const id of ids) {
-    const r = await expireCustomerBalance(id, reason, { id: user.id, email: user.email ?? null });
-    results.push(r);
-    if (r.ok) {
-      succeeded++;
-      totalDebited += r.shopify_debited;
-    } else {
-      failed++;
+  // Run with bounded concurrency. Shopify GraphQL is cost-based (1000 point budget,
+  // ~10 points per debit) and Klaviyo's profile API allows 75/sec — concurrency of 5
+  // is safe and gives roughly a 5x speedup over sequential processing.
+  const CONCURRENCY = 5;
+  const t0 = Date.now();
+
+  for (let i = 0; i < ids.length; i += CONCURRENCY) {
+    const slice = ids.slice(i, i + CONCURRENCY);
+    const batch = await Promise.all(
+      slice.map((id) => expireCustomerBalance(id, reason, { id: user.id, email: user.email ?? null }))
+    );
+    for (const r of batch) {
+      results.push(r);
+      if (r.ok) {
+        succeeded++;
+        totalDebited += r.shopify_debited;
+      } else {
+        failed++;
+      }
     }
   }
 
@@ -48,6 +59,8 @@ export async function POST(request: NextRequest) {
     succeeded,
     failed,
     total_debited: Math.round(totalDebited * 100) / 100,
+    duration_ms: Date.now() - t0,
+    concurrency: CONCURRENCY,
     results,
   });
 }
