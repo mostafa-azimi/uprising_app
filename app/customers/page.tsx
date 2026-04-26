@@ -6,7 +6,7 @@ import { getSignedInUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
-interface SearchParams { q?: string; sort?: string; dir?: string; page?: string; size?: string }
+interface SearchParams { q?: string; sort?: string; dir?: string; page?: string; size?: string; balance?: string }
 
 const VALID_SIZES = [25, 50, 75, 100, 150, 200] as const;
 const ALL_LIMIT = 2000;
@@ -43,6 +43,16 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
 
   if (q) {
     query = query.ilike('email', `%${q}%`);
+  }
+
+  // Balance filter: 'positive' (default), 'zero', 'all'
+  const balanceFilter = searchParams.balance && ['positive', 'zero', 'all'].includes(searchParams.balance)
+    ? searchParams.balance
+    : 'all';
+  if (balanceFilter === 'positive') {
+    query = query.gt('total_balance_cached', 0);
+  } else if (balanceFilter === 'zero') {
+    query = query.lte('total_balance_cached', 0);
   }
 
   query = query.order(SORT_COLUMNS[sortKey], { ascending: dir === 'asc', nullsFirst: false });
@@ -93,6 +103,16 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
         <input type="hidden" name="sort" value={sortKey} />
         <input type="hidden" name="dir" value={dir} />
         <select
+          name="balance"
+          defaultValue={balanceFilter}
+          className="border border-line rounded-lg px-3 py-2 text-sm bg-white"
+          title="Filter by balance"
+        >
+          <option value="all">All customers</option>
+          <option value="positive">With balance</option>
+          <option value="zero">Zero balance only</option>
+        </select>
+        <select
           name="size"
           defaultValue={sizeParam}
           className="border border-line rounded-lg px-3 py-2 text-sm bg-white"
@@ -129,17 +149,17 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
 
       {totalPages > 1 && (
         <nav className="mt-6 flex items-center justify-between text-sm">
-          <PageLink page={page - 1} disabled={page <= 1} q={q} sort={sortKey} dir={dir} size={sizeParam}>← Previous</PageLink>
+          <PageLink page={page - 1} disabled={page <= 1} q={q} sort={sortKey} dir={dir} size={sizeParam} balance={balanceFilter}>← Previous</PageLink>
           <span className="text-muted">Page {page} of {totalPages}</span>
-          <PageLink page={page + 1} disabled={page >= totalPages} q={q} sort={sortKey} dir={dir} size={sizeParam}>Next →</PageLink>
+          <PageLink page={page + 1} disabled={page >= totalPages} q={q} sort={sortKey} dir={dir} size={sizeParam} balance={balanceFilter}>Next →</PageLink>
         </nav>
       )}
     </main>
   );
 }
 
-function PageLink({ page, disabled, q, sort, dir, size, children }: {
-  page: number; disabled: boolean; q: string; sort: string; dir: string; size: string; children: React.ReactNode;
+function PageLink({ page, disabled, q, sort, dir, size, balance, children }: {
+  page: number; disabled: boolean; q: string; sort: string; dir: string; size: string; balance: string; children: React.ReactNode;
 }) {
   if (disabled) {
     return <span className="text-muted opacity-50 cursor-not-allowed">{children}</span>;
@@ -149,6 +169,7 @@ function PageLink({ page, disabled, q, sort, dir, size, children }: {
   if (sort) params.set('sort', sort);
   if (dir) params.set('dir', dir);
   if (size && size !== '100') params.set('size', size);
+  if (balance && balance !== 'all') params.set('balance', balance);
   params.set('page', String(page));
   return (
     <Link href={`/customers?${params.toString()}`} className="text-ink hover:underline font-medium">

@@ -19,10 +19,14 @@ export function CustomerActions({
   customerId,
   email,
   currentBalance,
+  loyaltyCardCode,
+  expirationDate,
 }: {
   customerId: string;
   email: string;
   currentBalance: number;
+  loyaltyCardCode: string | null;
+  expirationDate: string | null;
 }) {
   const router = useRouter();
   const [, startTransition] = useTransition();
@@ -35,9 +39,56 @@ export function CustomerActions({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  // Edit-fields panel state
+  const [editEmail, setEditEmail] = useState(email);
+  const [editCode, setEditCode] = useState(loyaltyCardCode ?? '');
+  const [editExpiration, setEditExpiration] = useState(expirationDate ?? '');
+  const [editBusy, setEditBusy] = useState(false);
+  const [confirmEmailChange, setConfirmEmailChange] = useState(false);
+
   function reset() {
     setError(null);
     setSuccess(null);
+  }
+
+  async function saveFields(skipEmailConfirm = false) {
+    reset();
+    const updates: Record<string, string> = {};
+    if (editEmail.trim().toLowerCase() !== email.toLowerCase()) updates.email = editEmail.trim().toLowerCase();
+    if (editCode.trim() !== (loyaltyCardCode ?? '')) updates.loyalty_card_code = editCode.trim();
+    if ((editExpiration || '') !== (expirationDate ?? '')) updates.expiration_date = editExpiration;
+
+    if (Object.keys(updates).length === 0) {
+      setSuccess('No changes to save.');
+      return;
+    }
+
+    if (updates.email && !skipEmailConfirm) {
+      setConfirmEmailChange(true);
+      return;
+    }
+
+    setEditBusy(true);
+    setConfirmEmailChange(false);
+    try {
+      const res = await fetch(`/api/customers/${customerId}/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setError(json.error ?? `${res.status} ${res.statusText}`);
+        return;
+      }
+      const klaviyoNote = json.klaviyo ? ` Klaviyo: ${json.klaviyo}.` : '';
+      setSuccess(`Saved ${(json.updates ?? []).join(', ')}.${klaviyoNote}`);
+      startTransition(() => router.refresh());
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setEditBusy(false);
+    }
   }
 
   async function expire() {
@@ -110,6 +161,51 @@ export function CustomerActions({
       {error && <div className="mb-3 p-3 rounded-lg border border-bad bg-red-50 text-sm text-bad">{error}</div>}
       {success && <div className="mb-3 p-3 rounded-lg border border-emerald-200 bg-emerald-50 text-sm text-emerald-700">{success}</div>}
 
+      {/* Edit profile fields */}
+      <div className="mb-6 border-b border-line pb-6">
+        <h3 className="font-medium mb-2">Edit profile fields</h3>
+        <p className="text-xs text-muted mb-3">
+          Updates our database and syncs the relevant Klaviyo properties. Email changes also update the Klaviyo profile (manual merge may be needed if Klaviyo already has another profile with the new email).
+        </p>
+        <div className="grid sm:grid-cols-3 gap-3">
+          <label className="block">
+            <span className="text-xs text-muted block mb-1">Email</span>
+            <input
+              type="email"
+              value={editEmail}
+              onChange={(e) => setEditEmail(e.target.value)}
+              className="w-full border border-line rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ink"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-muted block mb-1">Loyalty card code</span>
+            <input
+              type="text"
+              value={editCode}
+              onChange={(e) => setEditCode(e.target.value)}
+              placeholder="e.g. fec7cebc5c20f91e"
+              className="w-full border border-line rounded-lg px-3 py-2 text-sm bg-white font-mono focus:outline-none focus:ring-2 focus:ring-ink"
+            />
+          </label>
+          <label className="block">
+            <span className="text-xs text-muted block mb-1">Expiration date (display)</span>
+            <input
+              type="date"
+              value={editExpiration}
+              onChange={(e) => setEditExpiration(e.target.value)}
+              className="w-full border border-line rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ink"
+            />
+          </label>
+        </div>
+        <button
+          onClick={() => saveFields()}
+          disabled={editBusy}
+          className="mt-3 bg-ink text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+        >
+          {editBusy ? 'Saving…' : 'Save changes'}
+        </button>
+      </div>
+
       <div className="grid sm:grid-cols-2 gap-6">
         {/* Manual adjust */}
         <div>
@@ -177,6 +273,36 @@ export function CustomerActions({
           </button>
         </div>
       </div>
+
+      {confirmEmailChange && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4">
+          <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6">
+            <h2 className="text-lg font-bold mb-2">Change customer email?</h2>
+            <p className="text-sm text-muted mb-2">
+              <strong>{email}</strong> → <strong>{editEmail.trim().toLowerCase()}</strong>
+            </p>
+            <p className="text-sm text-muted mb-4">
+              Email is the primary identifier across our app, Klaviyo, and Shopify webhooks.
+              We'll update our DB and create/update the Klaviyo profile. If Klaviyo already has a profile with the new email,
+              you may need to manually merge them in Klaviyo.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmEmailChange(false)}
+                className="px-4 py-2 rounded-lg text-sm border border-line hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => saveFields(true)}
+                className="px-4 py-2 rounded-lg text-sm bg-ink text-white font-medium"
+              >
+                Yes, change email
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirmExpire && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4">

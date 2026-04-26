@@ -134,6 +134,8 @@ export default async function CustomerDetail({ params }: { params: Params }) {
           customerId={customer.id}
           email={customer.email}
           currentBalance={Number(customer.total_balance_cached ?? 0)}
+          loyaltyCardCode={customer.loyalty_card_code ?? null}
+          expirationDate={customer.expiration_date ?? null}
         />
       )}
 
