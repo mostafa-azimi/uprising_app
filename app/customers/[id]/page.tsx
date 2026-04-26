@@ -23,8 +23,10 @@ function fmtDate(d: string | null | undefined) {
 function fmtDateTime(d: string | null | undefined) {
   if (!d) return '—';
   return new Date(d).toLocaleString('en-US', {
+    timeZone: 'America/New_York',
     year: 'numeric', month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit',
+    timeZoneName: 'short',
   });
 }
 
