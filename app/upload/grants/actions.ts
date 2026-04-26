@@ -30,6 +30,7 @@ async function createNewEvent(args: {
       total_grants_count: 0,
       total_grants_amount: 0,
       status: 'completed',
+      kind: 'upload',
     })
     .select('id')
     .single();

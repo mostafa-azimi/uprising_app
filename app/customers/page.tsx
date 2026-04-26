@@ -2,12 +2,14 @@ import Link from 'next/link';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { CopyButton } from '@/components/copy-button';
 import { CustomersTable } from './customers-table';
+import { getSignedInUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
-interface SearchParams { q?: string; sort?: string; dir?: string; page?: string }
+interface SearchParams { q?: string; sort?: string; dir?: string; page?: string; size?: string }
 
-const PAGE_SIZE = 100;
+const VALID_SIZES = [25, 50, 75, 100, 150, 200] as const;
+const ALL_LIMIT = 2000;
 
 const SORT_COLUMNS: Record<string, string> = {
   email: 'email',
@@ -19,11 +21,21 @@ const SORT_COLUMNS: Record<string, string> = {
 
 export default async function CustomersPage({ searchParams }: { searchParams: SearchParams }) {
   const supabase = createSupabaseServerClient();
+  const me = await getSignedInUser();
+  const isAdmin = me?.role === 'admin';
   const q = (searchParams.q ?? '').trim().toLowerCase();
   const sortKey = searchParams.sort && SORT_COLUMNS[searchParams.sort] ? searchParams.sort : 'activity';
   const dir = searchParams.dir === 'asc' ? 'asc' : 'desc';
+  const sizeParam = searchParams.size ?? '100';
+  let pageSize: number;
+  if (sizeParam === 'all') {
+    pageSize = ALL_LIMIT;
+  } else {
+    const parsed = parseInt(sizeParam, 10);
+    pageSize = (VALID_SIZES as readonly number[]).includes(parsed) ? parsed : 100;
+  }
   const page = Math.max(1, parseInt(searchParams.page ?? '1', 10) || 1);
-  const offset = (page - 1) * PAGE_SIZE;
+  const offset = (page - 1) * pageSize;
 
   let query = supabase
     .from('customers')
@@ -35,9 +47,9 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
 
   query = query.order(SORT_COLUMNS[sortKey], { ascending: dir === 'asc', nullsFirst: false });
 
-  const { data: customers, error, count } = await query.range(offset, offset + PAGE_SIZE - 1);
+  const { data: customers, error, count } = await query.range(offset, offset + pageSize - 1);
   const totalCount = count ?? 0;
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
 
   // Active grant counts in a separate query
   const ids = (customers ?? []).map((c) => c.id);
@@ -61,7 +73,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
       <h1 className="text-3xl font-bold mt-2 mb-1">Customers</h1>
       <div className="flex items-baseline justify-between mb-6 gap-3 flex-wrap">
         <p className="text-sm text-muted">
-          {totalCount.toLocaleString()} total · showing {totalCount === 0 ? 0 : offset + 1}–{Math.min(offset + PAGE_SIZE, totalCount)} on page {page} of {totalPages}
+          {totalCount.toLocaleString()} total · showing {totalCount === 0 ? 0 : offset + 1}–{Math.min(offset + pageSize, totalCount)} on page {page} of {totalPages}
         </p>
         <a
           href={`/api/admin/export/customers${q ? `?q=${encodeURIComponent(q)}` : ''}`}
@@ -71,7 +83,7 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
         </a>
       </div>
 
-      <form className="flex flex-wrap gap-3 mb-6">
+      <form className="flex flex-wrap gap-3 mb-6 items-center">
         <input
           name="q"
           defaultValue={q}
@@ -80,7 +92,21 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
         />
         <input type="hidden" name="sort" value={sortKey} />
         <input type="hidden" name="dir" value={dir} />
-        <button type="submit" className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-medium">Search</button>
+        <select
+          name="size"
+          defaultValue={sizeParam}
+          className="border border-line rounded-lg px-3 py-2 text-sm bg-white"
+          title="Customers per page"
+        >
+          <option value="25">25 / page</option>
+          <option value="50">50 / page</option>
+          <option value="75">75 / page</option>
+          <option value="100">100 / page</option>
+          <option value="150">150 / page</option>
+          <option value="200">200 / page</option>
+          <option value="all">All</option>
+        </select>
+        <button type="submit" className="bg-ink text-white px-4 py-2 rounded-lg text-sm font-medium">Apply</button>
       </form>
 
       {error ? (
@@ -97,22 +123,23 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
           dir={dir}
           q={q}
           shopAdminBase={`https://admin.shopify.com/store/${(process.env.SHOPIFY_STORE_DOMAIN || '').replace('.myshopify.com', '')}`}
+          isAdmin={isAdmin}
         />
       )}
 
       {totalPages > 1 && (
         <nav className="mt-6 flex items-center justify-between text-sm">
-          <PageLink page={page - 1} disabled={page <= 1} q={q} sort={sortKey} dir={dir}>← Previous</PageLink>
+          <PageLink page={page - 1} disabled={page <= 1} q={q} sort={sortKey} dir={dir} size={sizeParam}>← Previous</PageLink>
           <span className="text-muted">Page {page} of {totalPages}</span>
-          <PageLink page={page + 1} disabled={page >= totalPages} q={q} sort={sortKey} dir={dir}>Next →</PageLink>
+          <PageLink page={page + 1} disabled={page >= totalPages} q={q} sort={sortKey} dir={dir} size={sizeParam}>Next →</PageLink>
         </nav>
       )}
     </main>
   );
 }
 
-function PageLink({ page, disabled, q, sort, dir, children }: {
-  page: number; disabled: boolean; q: string; sort: string; dir: string; children: React.ReactNode;
+function PageLink({ page, disabled, q, sort, dir, size, children }: {
+  page: number; disabled: boolean; q: string; sort: string; dir: string; size: string; children: React.ReactNode;
 }) {
   if (disabled) {
     return <span className="text-muted opacity-50 cursor-not-allowed">{children}</span>;
@@ -121,6 +148,7 @@ function PageLink({ page, disabled, q, sort, dir, children }: {
   if (q) params.set('q', q);
   if (sort) params.set('sort', sort);
   if (dir) params.set('dir', dir);
+  if (size && size !== '100') params.set('size', size);
   params.set('page', String(page));
   return (
     <Link href={`/customers?${params.toString()}`} className="text-ink hover:underline font-medium">

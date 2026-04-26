@@ -55,6 +55,9 @@ export async function signUpWithPassword(formData: FormData) {
   const password = String(formData.get('password') ?? '');
   if (!email || !password) redirect('/login?mode=signup&error=Email%20and%20password%20required');
   if (password.length < 8) redirect('/login?mode=signup&error=Password%20must%20be%20at%20least%208%20characters');
+  if (!email.endsWith('@dischub.com')) {
+    redirect('/login?mode=signup&error=Sign-up%20is%20restricted%20to%20%40dischub.com%20email%20addresses');
+  }
 
   const supabase = createSupabaseServerClient();
   const origin = headers().get('origin') ?? process.env.APP_URL ?? 'http://localhost:3000';

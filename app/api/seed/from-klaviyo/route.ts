@@ -1,3 +1,4 @@
+// (was the seed-from-klaviyo importer; disabled — migration happens via /admin/migrate)
 // Endpoint disabled. Bulk seed will happen via direct SQL in Supabase, not via this app.
 // Keeping the file as a 410 Gone so any leftover client calls fail loudly.
 

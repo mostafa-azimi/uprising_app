@@ -177,7 +177,7 @@ export async function adjustCustomerBalance(args: {
     if (!eventId) {
       const { data: created } = await supabase
         .from('events')
-        .insert({ name: 'Manual Adjustments', host: 'Manual', status: 'completed' })
+        .insert({ name: 'Manual Adjustments', host: 'Manual', status: 'completed', kind: 'system' })
         .select('id')
         .single();
       eventId = created!.id;

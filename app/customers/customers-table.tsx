@@ -46,11 +46,10 @@ const HEADERS: Array<{ key: string; label: string; sortable: boolean }> = [
   { key: '__code', label: 'Loyalty code', sortable: false },
   { key: 'expiration', label: 'Expires', sortable: true },
   { key: 'activity', label: 'Last activity', sortable: true },
-  { key: '__actions', label: '', sortable: false },
 ];
 
 export function CustomersTable({
-  customers, grantCounts, sortKey, dir, q, shopAdminBase,
+  customers, grantCounts, sortKey, dir, q, shopAdminBase, isAdmin,
 }: {
   customers: Customer[];
   grantCounts: Record<string, { active: number; total: number }>;
@@ -58,6 +57,7 @@ export function CustomersTable({
   dir: 'asc' | 'desc';
   q: string;
   shopAdminBase: string;
+  isAdmin: boolean;
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -135,8 +135,8 @@ export function CustomersTable({
 
   return (
     <>
-      {/* Bulk action toolbar — only visible when something is selected */}
-      {selected.size > 0 && (
+      {/* Bulk action toolbar — only visible to admins when something is selected */}
+      {isAdmin && selected.size > 0 && (
         <div className="mb-3 px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between text-sm">
           <span><strong>{selected.size}</strong> selected</span>
           <div className="flex gap-2">
@@ -172,6 +172,7 @@ export function CustomersTable({
                 const href = sortHref(h.key);
                 const indicator = sortIndicator(h.key);
                 if (h.key === '__select') {
+                  if (!isAdmin) return <th key={h.key} className="w-0 p-0" />;
                   return (
                     <th key={h.key} className="py-2 px-4 w-10">
                       <input
@@ -201,23 +202,32 @@ export function CustomersTable({
               const gc = grantCounts[c.id] ?? { active: 0, total: 0 };
               return (
                 <tr key={c.id} className={`border-b border-line last:border-0 hover:bg-slate-50 ${selected.has(c.id) ? 'bg-amber-50' : ''}`}>
-                  <td className="py-2 px-4">
-                    <input
-                      type="checkbox"
-                      checked={selected.has(c.id)}
-                      onChange={() => toggleOne(c.id)}
-                      aria-label={`Select ${c.email}`}
-                    />
-                  </td>
+                  {isAdmin ? (
+                    <td className="py-2 px-4">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(c.id)}
+                        onChange={() => toggleOne(c.id)}
+                        aria-label={`Select ${c.email}`}
+                      />
+                    </td>
+                  ) : <td className="w-0 p-0" />}
                   <td className="py-2 px-4">
                     <div className="flex items-center gap-1.5">
-                      <span className="font-medium">{c.email}</span>
+                      <Link
+                        href={`/customers/${c.id}`}
+                        className="font-medium text-ink hover:underline"
+                        title="Open this customer's balance + grant history in Uprising"
+                      >
+                        {c.email}
+                      </Link>
+                      <CopyButton value={c.email} />
                       <a
                         href={klaviyoLinkHref(c)}
                         target="_blank"
                         rel="noreferrer"
-                        title="Open in Klaviyo"
-                        aria-label={`Open ${c.email} in Klaviyo`}
+                        title="Open this customer's profile in Klaviyo (new tab)"
+                        aria-label={`Open ${c.email} in Klaviyo (new tab)`}
                         className="inline-flex items-center justify-center w-5 h-5 rounded border border-line bg-white text-xs text-muted hover:text-ink hover:border-ink"
                       >
                         ↗
@@ -243,8 +253,8 @@ export function CustomersTable({
                             href={`${shopAdminBase}/gift_cards/${c.shopify_gift_card_id.split('/').pop()}`}
                             target="_blank"
                             rel="noreferrer"
-                            title="Open this gift card in Shopify admin"
-                            aria-label="Open gift card in Shopify"
+                            title="Open this gift card in Shopify admin (new tab)"
+                            aria-label="Open gift card in Shopify (new tab)"
                             className="inline-flex items-center justify-center w-5 h-5 rounded border border-line bg-white hover:text-ink hover:border-ink"
                           >
                             ↗
@@ -261,11 +271,6 @@ export function CustomersTable({
                   </td>
                   <td className="py-2 px-4 text-muted text-xs" title={c.updated_at}>
                     {fmtRelative(c.updated_at)}
-                  </td>
-                  <td className="py-2 px-4 text-right">
-                    <Link href={`/customers/${c.id}`} className="text-ink underline">
-                      Open →
-                    </Link>
                   </td>
                 </tr>
               );

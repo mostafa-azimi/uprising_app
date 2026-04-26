@@ -30,8 +30,10 @@ const TYPE_LABELS: Record<string, string> = {
 
 function fmtDateTime(iso: string) {
   return new Date(iso).toLocaleString('en-US', {
+    timeZone: 'America/New_York',
     year: 'numeric', month: 'short', day: 'numeric',
     hour: 'numeric', minute: '2-digit',
+    timeZoneName: 'short',
   });
 }
 

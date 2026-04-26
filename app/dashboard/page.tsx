@@ -59,6 +59,10 @@ export default async function DashboardPage() {
           <h2 className="font-semibold mb-1">Events</h2>
           <p className="text-sm text-muted">Browse every campaign you've uploaded — grant counts, totals, and the customers covered.</p>
         </Link>
+        <Link href="/reports/expirations" className="block p-6 border border-line rounded-xl bg-white hover:border-ink transition">
+          <h2 className="font-semibold mb-1">Expirations report</h2>
+          <p className="text-sm text-muted">$ expired this week + 8-month forecast chart of upcoming expirations.</p>
+        </Link>
       </section>
 
       <section className="mt-4">

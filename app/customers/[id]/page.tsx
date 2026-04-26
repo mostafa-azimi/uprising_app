@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { CopyButton } from '@/components/copy-button';
 import { CustomerActions } from './customer-actions';
 import { expirationClass } from '@/lib/dates';
+import { getSignedInUser } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,6 +51,8 @@ function ledgerTypeBadge(type: string) {
 
 export default async function CustomerDetail({ params }: { params: Params }) {
   const supabase = createSupabaseServerClient();
+  const me = await getSignedInUser();
+  const isAdmin = me?.role === 'admin';
 
   const { data: customer } = await supabase
     .from('customers')
@@ -126,11 +129,13 @@ export default async function CustomerDetail({ params }: { params: Params }) {
         </div>
       </section>
 
-      <CustomerActions
-        customerId={customer.id}
-        email={customer.email}
-        currentBalance={Number(customer.total_balance_cached ?? 0)}
-      />
+      {isAdmin && (
+        <CustomerActions
+          customerId={customer.id}
+          email={customer.email}
+          currentBalance={Number(customer.total_balance_cached ?? 0)}
+        />
+      )}
 
       {/* Active grants */}
       <h2 className="text-xl font-semibold mb-3">Active grants ({activeGrants.length})</h2>

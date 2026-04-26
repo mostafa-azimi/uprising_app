@@ -54,6 +54,37 @@ export default async function EventDetail({ params }: { params: { id: string } }
   const redeemPct = totalIssued > 0 ? (totalRedeemed / totalIssued) * 100 : 0;
   const activeCount = (grants ?? []).filter((g) => g.status === 'active').length;
 
+  // Revenue attribution: pull every redemption ledger row whose grant belongs to THIS event,
+  // then look up the corresponding redemption_orders to get full order totals + non-gift-card amount.
+  const grantIds = (grants ?? []).map((g) => g.id);
+  let totalGcRedeemed = 0;
+  let attributedRevenue = 0;
+  let attributedOther = 0;
+  let distinctOrderCount = 0;
+  if (grantIds.length > 0) {
+    const { data: redLedger } = await supabase
+      .from('ledger')
+      .select('amount, shopify_order_id')
+      .in('grant_id', grantIds)
+      .eq('type', 'redeem');
+    const orderIds = new Set<string>();
+    (redLedger ?? []).forEach((r) => {
+      totalGcRedeemed += Math.abs(Number(r.amount ?? 0));
+      if (r.shopify_order_id) orderIds.add(r.shopify_order_id);
+    });
+    distinctOrderCount = orderIds.size;
+    if (orderIds.size > 0) {
+      const { data: orders } = await supabase
+        .from('redemption_orders')
+        .select('order_total, gift_card_amount, other_amount')
+        .in('shopify_order_id', Array.from(orderIds));
+      (orders ?? []).forEach((o) => {
+        attributedRevenue += Number(o.order_total ?? 0);
+        attributedOther += Number(o.other_amount ?? 0);
+      });
+    }
+  }
+
   return (
     <main className="min-h-screen px-8 py-10 max-w-6xl mx-auto">
       <Link href="/events" className="text-sm text-muted hover:text-ink">← Events</Link>
@@ -69,6 +100,18 @@ export default async function EventDetail({ params }: { params: { id: string } }
         <Stat label="Total issued" value={fmtMoney(totalIssued)} />
         <Stat label="Active grants" value={String(activeCount)} />
         <Stat label="Redeemed" value={`${fmtMoney(totalRedeemed)} (${redeemPct.toFixed(0)}%)`} />
+      </section>
+
+      <h2 className="text-xl font-semibold mb-3">Revenue attribution</h2>
+      <p className="text-sm text-muted mb-3">
+        Customers used credits from this event in <strong>{distinctOrderCount}</strong> Shopify order{distinctOrderCount === 1 ? '' : 's'}.
+        Total order revenue is the gross of all those orders (some may include credit from other events too).
+      </p>
+      <section className="grid sm:grid-cols-4 gap-3 mb-8">
+        <Stat label="Orders that used this event" value={String(distinctOrderCount)} />
+        <Stat label="Gift card redeemed (from this event)" value={fmtMoney(totalGcRedeemed)} />
+        <Stat label="Non-gift-card revenue" value={fmtMoney(attributedOther)} sublabel="cash / credit / ShopPay" />
+        <Stat label="Total attributed order $" value={fmtMoney(attributedRevenue)} />
       </section>
 
       <h2 className="text-xl font-semibold mb-3">Grants ({(grants ?? []).length})</h2>
@@ -112,11 +155,12 @@ export default async function EventDetail({ params }: { params: { id: string } }
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({ label, value, sublabel }: { label: string; value: string; sublabel?: string }) {
   return (
     <div className="p-4 rounded-xl border border-line bg-white">
       <div className="text-xs text-muted uppercase tracking-wide">{label}</div>
       <div className="text-2xl font-bold mt-1">{value}</div>
+      {sublabel && <div className="text-xs text-muted mt-1">{sublabel}</div>}
     </div>
   );
 }

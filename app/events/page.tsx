@@ -34,7 +34,8 @@ export default async function EventsPage({ searchParams }: { searchParams: Searc
 
   let query = supabase
     .from('events')
-    .select('id, name, host, event_date, total_grants_count, total_grants_amount, status, source_filename, created_at', { count: 'exact' });
+    .select('id, name, host, event_date, total_grants_count, total_grants_amount, status, source_filename, created_at', { count: 'exact' })
+    .eq('kind', 'upload');  // only events from CSV uploads, not Manual Adjustments / Rise Migration
   if (q) query = query.ilike('name', `%${q}%`);
   query = query.order(SORT_COLS[sortKey], { ascending: dir === 'asc' });
 

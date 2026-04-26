@@ -18,7 +18,7 @@ export default async function SettingsPage() {
       <h2 className="text-lg font-semibold mb-3">Account</h2>
       <section className="grid sm:grid-cols-2 gap-4 mb-10">
         <Card href="/account" title="Profile & password" desc="Set or change your password. Your sign-in email cannot be changed here." />
-        <Card href="/settings/admins" title="Admin users" desc="Invite or remove people who can sign in to this app." />
+        <Card href="/settings/users" title="Users" desc="See everyone with access. Promote to admin, demote to viewer, or revoke." />
       </section>
 
       <h2 className="text-lg font-semibold mb-3">Integrations</h2>

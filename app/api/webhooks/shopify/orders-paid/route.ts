@@ -104,6 +104,13 @@ export async function POST(request: NextRequest) {
     },
   });
 
+  // Total order value from ALL successful sale transactions (gift card + cash + credit + ShopPay etc.)
+  const allSales = transactions.filter(
+    (t) => (t.kind ?? '').toLowerCase() === 'sale' && (t.status ?? '').toLowerCase() === 'success'
+  );
+  const orderTotal = allSales.reduce((s, t) => s + Number(t.amount ?? 0), 0);
+  const otherAmount = orderTotal - totalGiftCardRedeemed;
+
   if (totalGiftCardRedeemed <= 0 || giftCardTxns.length === 0) {
     return NextResponse.json({ ok: true, redeemed: 0, reason: 'no gift_card transactions' });
   }
@@ -147,6 +154,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, redeemed: 0, reason: 'customer not in our DB' });
   }
 
+  // Record the full order attribution snapshot (idempotent on shopify_order_id)
+  await supabase.from('redemption_orders').upsert({
+    customer_id: customerId,
+    shopify_order_id: orderId,
+    order_total: orderTotal,
+    gift_card_amount: totalGiftCardRedeemed,
+    other_amount: otherAmount,
+    raw_transactions: transactions as unknown as Record<string, unknown>,
+  }, { onConflict: 'shopify_order_id' });
+
   const result = await applyRedemption({
     customerId,
     amount: totalGiftCardRedeemed,
@@ -154,5 +171,9 @@ export async function POST(request: NextRequest) {
     description: `Shopify order redemption${email ? ' — ' + email : ''}`,
   });
 
-  return NextResponse.json(result);
+  return NextResponse.json({
+    ...result,
+    order_total: orderTotal,
+    other_amount: otherAmount,
+  });
 }

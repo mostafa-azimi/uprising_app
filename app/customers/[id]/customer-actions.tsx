@@ -3,6 +3,18 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 
+const ADJUST_REASONS = [
+  'Customer service goodwill',
+  'Refund or make-good',
+  'Promotion or contest',
+  'Trade-in credit',
+  'Rise migration correction',
+  'Data entry correction',
+  'Bonus credit',
+  'Manual debit (correction)',
+  'Other',
+];
+
 export function CustomerActions({
   customerId,
   email,
@@ -17,7 +29,8 @@ export function CustomerActions({
   const [busy, setBusy] = useState(false);
   const [confirmExpire, setConfirmExpire] = useState(false);
   const [adjustAmount, setAdjustAmount] = useState('');
-  const [adjustReason, setAdjustReason] = useState('');
+  const [adjustReasonChoice, setAdjustReasonChoice] = useState<string>(ADJUST_REASONS[0]);
+  const [adjustReasonOther, setAdjustReasonOther] = useState('');
   const [adjustExpires, setAdjustExpires] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -54,7 +67,10 @@ export function CustomerActions({
       setError('Enter a non-zero amount (positive to credit, negative to debit).');
       return;
     }
-    if (!adjustReason.trim()) {
+    const reason = adjustReasonChoice === 'Other'
+      ? adjustReasonOther.trim()
+      : adjustReasonChoice.trim();
+    if (!reason) {
       setError('Reason is required.');
       return;
     }
@@ -65,7 +81,7 @@ export function CustomerActions({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           amount,
-          reason: adjustReason.trim(),
+          reason,
           expiresOn: adjustExpires || undefined,
         }),
       });
@@ -76,7 +92,8 @@ export function CustomerActions({
       }
       setSuccess(`Balance is now $${json.new_balance?.toFixed?.(2) ?? '0.00'}.`);
       setAdjustAmount('');
-      setAdjustReason('');
+      setAdjustReasonChoice(ADJUST_REASONS[0]);
+      setAdjustReasonOther('');
       setAdjustExpires('');
       startTransition(() => router.refresh());
     } catch (e) {
@@ -109,13 +126,22 @@ export function CustomerActions({
               placeholder="Amount (e.g. 5.00 or -2.50)"
               className="w-full border border-line rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ink"
             />
-            <input
-              type="text"
-              value={adjustReason}
-              onChange={(e) => setAdjustReason(e.target.value)}
-              placeholder="Reason (required, shows on ledger)"
+            <select
+              value={adjustReasonChoice}
+              onChange={(e) => setAdjustReasonChoice(e.target.value)}
               className="w-full border border-line rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ink"
-            />
+            >
+              {ADJUST_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
+            </select>
+            {adjustReasonChoice === 'Other' && (
+              <input
+                type="text"
+                value={adjustReasonOther}
+                onChange={(e) => setAdjustReasonOther(e.target.value)}
+                placeholder="Custom reason (required)"
+                className="w-full border border-line rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ink"
+              />
+            )}
             <input
               type="date"
               value={adjustExpires}

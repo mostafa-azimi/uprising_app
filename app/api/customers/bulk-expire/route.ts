@@ -23,8 +23,8 @@ export async function POST(request: NextRequest) {
   if (ids.length === 0) {
     return NextResponse.json({ error: 'No customerIds provided' }, { status: 400 });
   }
-  if (ids.length > 50) {
-    return NextResponse.json({ error: 'Maximum 50 customers per bulk-expire (was ' + ids.length + ')' }, { status: 400 });
+  if (ids.length > 200) {
+    return NextResponse.json({ error: 'Maximum 200 customers per bulk-expire (was ' + ids.length + ')' }, { status: 400 });
   }
 
   const reason = `Bulk expire by ${user.email ?? user.id}`;
