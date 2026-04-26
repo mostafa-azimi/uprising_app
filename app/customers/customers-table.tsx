@@ -4,6 +4,7 @@ import { useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { CopyButton } from '@/components/copy-button';
+import { expirationClass, expirationStatus } from '@/lib/dates';
 
 interface Customer {
   id: string;
@@ -254,7 +255,10 @@ export function CustomersTable({
                       <span className="text-muted">—</span>
                     )}
                   </td>
-                  <td className="py-2 px-4 text-muted text-xs">{fmtDate(c.expiration_date)}</td>
+                  <td className={`py-2 px-4 text-xs ${expirationClass(c.expiration_date)}`}
+                      title={expirationStatus(c.expiration_date) === 'past' ? 'Expired' : expirationStatus(c.expiration_date) === 'soon' ? 'Expires within 30 days' : ''}>
+                    {fmtDate(c.expiration_date)}
+                  </td>
                   <td className="py-2 px-4 text-muted text-xs" title={c.updated_at}>
                     {fmtRelative(c.updated_at)}
                   </td>

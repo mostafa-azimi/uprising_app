@@ -32,6 +32,24 @@ export async function signInWithPassword(formData: FormData) {
   redirect('/dashboard');
 }
 
+export async function requestPasswordReset(formData: FormData) {
+  const email = String(formData.get('email') ?? '').trim().toLowerCase();
+  if (!email) redirect('/login?mode=forgot&error=Email%20required');
+
+  const supabase = createSupabaseServerClient();
+  const origin = headers().get('origin') ?? process.env.APP_URL ?? 'http://localhost:3000';
+
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${origin}/auth/callback?next=${encodeURIComponent('/account?recovery=1')}`,
+  });
+
+  // Don't surface "user not found" — just confirm to avoid email enumeration
+  if (error && !/user.*not.*found|invalid/i.test(error.message)) {
+    redirect(`/login?mode=forgot&error=${encodeURIComponent(error.message)}`);
+  }
+  redirect('/login?mode=forgot&sent=1');
+}
+
 export async function signOut() {
   const supabase = createSupabaseServerClient();
   await supabase.auth.signOut();

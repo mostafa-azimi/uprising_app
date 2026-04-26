@@ -8,10 +8,18 @@ interface SearchParams {
   email?: string;
   from?: string;     // YYYY-MM-DD
   to?: string;       // YYYY-MM-DD
+  sort?: string;     // 'created_at' | 'amount' | 'type'
+  dir?: string;      // 'asc' | 'desc'
   page?: string;
 }
 
 const PAGE_SIZE = 100;
+
+const SORT_COLS: Record<string, string> = {
+  created_at: 'created_at',
+  amount: 'amount',
+  type: 'type',
+};
 
 const TYPE_LABELS: Record<string, string> = {
   issue: 'Credit issued',
@@ -62,6 +70,8 @@ export default async function LedgerPage({ searchParams }: { searchParams: Searc
   const to = searchParams.to ?? '';
   const page = Math.max(1, parseInt(searchParams.page ?? '1', 10) || 1);
   const offset = (page - 1) * PAGE_SIZE;
+  const sortKey = searchParams.sort && SORT_COLS[searchParams.sort] ? searchParams.sort : 'created_at';
+  const dir: 'asc' | 'desc' = searchParams.dir === 'asc' ? 'asc' : 'desc';
 
   // Resolve email filter into customer_ids first
   let restrictedCustomerIds: string[] | null = null;
@@ -84,7 +94,7 @@ export default async function LedgerPage({ searchParams }: { searchParams: Searc
   if (restrictedCustomerIds) q = q.in('customer_id', restrictedCustomerIds);
 
   const { data: rows, error, count } = await q
-    .order('created_at', { ascending: false })
+    .order(SORT_COLS[sortKey], { ascending: dir === 'asc' })
     .range(offset, offset + PAGE_SIZE - 1);
   const totalCount = count ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
@@ -151,9 +161,15 @@ export default async function LedgerPage({ searchParams }: { searchParams: Searc
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-muted bg-slate-50 border-b border-line">
-                <th className="py-2 px-4 font-medium whitespace-nowrap">When</th>
-                <th className="py-2 px-4 font-medium">Type</th>
-                <th className="py-2 px-4 font-medium">Amount</th>
+                <th className="py-2 px-4 font-medium whitespace-nowrap">
+                  <SortHeader label="When" col="created_at" sortKey={sortKey} dir={dir} type={type} email={emailFilter} from={from} to={to} />
+                </th>
+                <th className="py-2 px-4 font-medium">
+                  <SortHeader label="Type" col="type" sortKey={sortKey} dir={dir} type={type} email={emailFilter} from={from} to={to} />
+                </th>
+                <th className="py-2 px-4 font-medium">
+                  <SortHeader label="Amount" col="amount" sortKey={sortKey} dir={dir} type={type} email={emailFilter} from={from} to={to} />
+                </th>
                 <th className="py-2 px-4 font-medium">Customer</th>
                 <th className="py-2 px-4 font-medium">Description</th>
                 <th className="py-2 px-4 font-medium">By</th>
@@ -198,17 +214,18 @@ export default async function LedgerPage({ searchParams }: { searchParams: Searc
 
       {totalPages > 1 && (
         <nav className="mt-6 flex items-center justify-between text-sm">
-          <PageLink page={page - 1} disabled={page <= 1} {...{ type, email: emailFilter, from, to }}>← Previous</PageLink>
+          <PageLink page={page - 1} disabled={page <= 1} type={type} email={emailFilter} from={from} to={to} sort={sortKey} dir={dir}>← Previous</PageLink>
           <span className="text-muted">Page {page} of {totalPages}</span>
-          <PageLink page={page + 1} disabled={page >= totalPages} {...{ type, email: emailFilter, from, to }}>Next →</PageLink>
+          <PageLink page={page + 1} disabled={page >= totalPages} type={type} email={emailFilter} from={from} to={to} sort={sortKey} dir={dir}>Next →</PageLink>
         </nav>
       )}
     </main>
   );
 }
 
-function PageLink({ page, disabled, type, email, from, to, children }: {
-  page: number; disabled: boolean; type: string; email: string; from: string; to: string; children: React.ReactNode;
+function PageLink({ page, disabled, type, email, from, to, sort, dir, children }: {
+  page: number; disabled: boolean; type: string; email: string; from: string; to: string;
+  sort?: string; dir?: 'asc' | 'desc'; children: React.ReactNode;
 }) {
   if (disabled) return <span className="text-muted opacity-50 cursor-not-allowed">{children}</span>;
   const params = new URLSearchParams();
@@ -216,10 +233,32 @@ function PageLink({ page, disabled, type, email, from, to, children }: {
   if (email) params.set('email', email);
   if (from) params.set('from', from);
   if (to) params.set('to', to);
+  if (sort && sort !== 'created_at') params.set('sort', sort);
+  if (dir && dir !== 'desc') params.set('dir', dir);
   params.set('page', String(page));
   return (
     <Link href={`/ledger?${params.toString()}`} className="text-ink hover:underline font-medium">
       {children}
+    </Link>
+  );
+}
+
+function SortHeader({ label, col, sortKey, dir, type, email, from, to }: {
+  label: string; col: string; sortKey: string; dir: 'asc' | 'desc';
+  type: string; email: string; from: string; to: string;
+}) {
+  const newDir = sortKey === col && dir === 'desc' ? 'asc' : 'desc';
+  const params = new URLSearchParams();
+  if (type && type !== 'all') params.set('type', type);
+  if (email) params.set('email', email);
+  if (from) params.set('from', from);
+  if (to) params.set('to', to);
+  params.set('sort', col);
+  params.set('dir', newDir);
+  const indicator = sortKey === col ? (dir === 'desc' ? ' ↓' : ' ↑') : '';
+  return (
+    <Link href={`/ledger?${params.toString()}`} className="hover:text-ink inline-flex items-center select-none">
+      {label}{indicator}
     </Link>
   );
 }

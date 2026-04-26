@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { CopyButton } from '@/components/copy-button';
 import { CustomerActions } from './customer-actions';
+import { expirationClass } from '@/lib/dates';
 
 export const dynamic = 'force-dynamic';
 
@@ -246,7 +247,7 @@ function GrantsTable({ grants, showRemaining = false }: { grants: GrantRow[]; sh
                   )}
                 </td>
               )}
-              <td className="py-2 px-4">{fmtDate(g.expires_on)}</td>
+              <td className={`py-2 px-4 ${expirationClass(g.expires_on)}`}>{fmtDate(g.expires_on)}</td>
               <td className="py-2 px-4">{statusBadge(g.status)}</td>
               <td className="py-2 px-4 text-muted">{g.events?.name ?? '—'}</td>
             </tr>

@@ -1,8 +1,12 @@
-import { signInWithMagicLink, signInWithPassword } from './actions';
+import { signInWithMagicLink, signInWithPassword, requestPasswordReset } from './actions';
 import { SubmitButton } from '@/components/submit-button';
 
+type Mode = 'magic' | 'password' | 'forgot';
+
 export default function LoginPage({ searchParams }: { searchParams: { sent?: string; error?: string; mode?: string } }) {
-  const mode = searchParams.mode === 'password' ? 'password' : 'magic';
+  const mode: Mode =
+    searchParams.mode === 'password' ? 'password' :
+    searchParams.mode === 'forgot' ? 'forgot' : 'magic';
 
   return (
     <main className="min-h-screen flex items-center justify-center px-6">
@@ -25,7 +29,7 @@ export default function LoginPage({ searchParams }: { searchParams: { sent?: str
           </a>
         </div>
 
-        {mode === 'magic' ? (
+        {mode === 'magic' && (
           <form action={signInWithMagicLink} className="space-y-3">
             <label className="block">
               <span className="text-sm font-medium">Email</span>
@@ -42,7 +46,9 @@ export default function LoginPage({ searchParams }: { searchParams: { sent?: str
               Send magic link
             </SubmitButton>
           </form>
-        ) : (
+        )}
+
+        {mode === 'password' && (
           <form action={signInWithPassword} className="space-y-3">
             <label className="block">
               <span className="text-sm font-medium">Email</span>
@@ -69,16 +75,41 @@ export default function LoginPage({ searchParams }: { searchParams: { sent?: str
             <SubmitButton className="w-full rounded-lg py-2 font-medium" pendingLabel="Signing in…">
               Sign in
             </SubmitButton>
-            <p className="text-xs text-muted">
-              First time? Sign in once with the magic link, then set a password under
-              <a href="/account" className="underline ml-1">Account settings</a>.
+            <div className="flex justify-between text-xs text-muted">
+              <a href="/login?mode=forgot" className="hover:text-ink">Forgot password?</a>
+              <span>First time? Use Magic link, then set a password under Settings.</span>
+            </div>
+          </form>
+        )}
+
+        {mode === 'forgot' && (
+          <form action={requestPasswordReset} className="space-y-3">
+            <p className="text-sm text-muted mb-1">
+              Enter your email. If we have a matching account, we'll send a reset link.
             </p>
+            <label className="block">
+              <span className="text-sm font-medium">Email</span>
+              <input
+                name="email"
+                type="email"
+                required
+                autoComplete="email"
+                className="mt-1 w-full border border-line rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ink"
+                placeholder="you@example.com"
+              />
+            </label>
+            <SubmitButton className="w-full rounded-lg py-2 font-medium" pendingLabel="Sending…">
+              Send reset link
+            </SubmitButton>
+            <div className="text-xs text-muted">
+              <a href="/login?mode=password" className="hover:text-ink">← Back to sign in</a>
+            </div>
           </form>
         )}
 
         {searchParams.sent && (
           <p className="mt-4 text-sm text-ok">
-            Check your email for the sign-in link.
+            {mode === 'forgot' ? 'If that email exists, a reset link is on the way.' : 'Check your email for the sign-in link.'}
           </p>
         )}
         {searchParams.error && (

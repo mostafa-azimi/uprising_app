@@ -5,7 +5,7 @@ import { SubmitButton } from '@/components/submit-button';
 
 export const dynamic = 'force-dynamic';
 
-export default async function AccountPage({ searchParams }: { searchParams: { error?: string; ok?: string } }) {
+export default async function AccountPage({ searchParams }: { searchParams: { error?: string; ok?: string; recovery?: string } }) {
   const supabase = createSupabaseServerClient();
   const { data: { user } } = await supabase.auth.getUser();
 
@@ -14,6 +14,12 @@ export default async function AccountPage({ searchParams }: { searchParams: { er
       <Link href="/dashboard" className="text-sm text-muted hover:text-ink">← Dashboard</Link>
       <h1 className="text-3xl font-bold mt-2 mb-1">Account</h1>
       <p className="text-sm text-muted mb-8">Signed in as {user?.email}.</p>
+
+      {searchParams.recovery && (
+        <div className="mb-6 p-4 rounded-lg border border-warn bg-yellow-50 text-sm">
+          <strong>Reset your password.</strong> Enter a new password below to complete the recovery.
+        </div>
+      )}
 
       <section className="border border-line rounded-xl bg-white p-6">
         <h2 className="text-lg font-semibold mb-1">Set or change password</h2>
