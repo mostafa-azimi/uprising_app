@@ -45,14 +45,19 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
     query = query.ilike('email', `%${q}%`);
   }
 
-  // Balance filter: 'positive' (default), 'zero', 'all'
+  // Balance filter — default is "positive" (with balance). When searching by
+  // email, the filter is intentionally bypassed so customers can be found
+  // regardless of their balance.
   const balanceFilter = searchParams.balance && ['positive', 'zero', 'all'].includes(searchParams.balance)
     ? searchParams.balance
-    : 'all';
-  if (balanceFilter === 'positive') {
-    query = query.gt('total_balance_cached', 0);
-  } else if (balanceFilter === 'zero') {
-    query = query.lte('total_balance_cached', 0);
+    : 'positive';
+  const filterActive = !q; // search overrides filter
+  if (filterActive) {
+    if (balanceFilter === 'positive') {
+      query = query.gt('total_balance_cached', 0);
+    } else if (balanceFilter === 'zero') {
+      query = query.lte('total_balance_cached', 0);
+    }
   }
 
   query = query.order(SORT_COLUMNS[sortKey], { ascending: dir === 'asc', nullsFirst: false });
@@ -82,9 +87,14 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
       <Link href="/dashboard" className="text-sm text-muted hover:text-ink">← Dashboard</Link>
       <h1 className="text-3xl font-bold mt-2 mb-1">Customers</h1>
       <div className="flex items-baseline justify-between mb-6 gap-3 flex-wrap">
-        <p className="text-sm text-muted">
-          {totalCount.toLocaleString()} total · showing {totalCount === 0 ? 0 : offset + 1}–{Math.min(offset + pageSize, totalCount)} on page {page} of {totalPages}
-        </p>
+        <div>
+          <p className="text-sm text-muted">
+            {totalCount.toLocaleString()} total · showing {totalCount === 0 ? 0 : offset + 1}–{Math.min(offset + pageSize, totalCount)} on page {page} of {totalPages}
+          </p>
+          {!filterActive && q && balanceFilter !== 'all' && (
+            <p className="text-xs text-muted mt-1 italic">Balance filter is bypassed while searching.</p>
+          )}
+        </div>
         <a
           href={`/api/admin/export/customers${q ? `?q=${encodeURIComponent(q)}` : ''}`}
           className="text-sm border border-line bg-white hover:border-ink rounded-lg px-3 py-1.5"
@@ -142,6 +152,8 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
           sortKey={sortKey}
           dir={dir}
           q={q}
+          balance={balanceFilter}
+          size={sizeParam}
           shopAdminBase={`https://admin.shopify.com/store/${(process.env.SHOPIFY_STORE_DOMAIN || '').replace('.myshopify.com', '')}`}
           isAdmin={isAdmin}
         />
@@ -169,7 +181,7 @@ function PageLink({ page, disabled, q, sort, dir, size, balance, children }: {
   if (sort) params.set('sort', sort);
   if (dir) params.set('dir', dir);
   if (size && size !== '100') params.set('size', size);
-  if (balance && balance !== 'all') params.set('balance', balance);
+  if (balance && balance !== 'positive') params.set('balance', balance);
   params.set('page', String(page));
   return (
     <Link href={`/customers?${params.toString()}`} className="text-ink hover:underline font-medium">

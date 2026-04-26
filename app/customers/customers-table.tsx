@@ -49,13 +49,15 @@ const HEADERS: Array<{ key: string; label: string; sortable: boolean }> = [
 ];
 
 export function CustomersTable({
-  customers, grantCounts, sortKey, dir, q, shopAdminBase, isAdmin,
+  customers, grantCounts, sortKey, dir, q, balance, size, shopAdminBase, isAdmin,
 }: {
   customers: Customer[];
   grantCounts: Record<string, { active: number; total: number }>;
   sortKey: string;
   dir: 'asc' | 'desc';
   q: string;
+  balance: string;
+  size: string;
   shopAdminBase: string;
   isAdmin: boolean;
 }) {
@@ -88,6 +90,8 @@ export function CustomersTable({
     const newDir = sortKey === headerKey && dir === 'desc' ? 'asc' : 'desc';
     const params = new URLSearchParams();
     if (q) params.set('q', q);
+    if (balance && balance !== 'positive') params.set('balance', balance);
+    if (size && size !== '100') params.set('size', size);
     params.set('sort', headerKey);
     params.set('dir', newDir);
     return `/customers?${params.toString()}`;
