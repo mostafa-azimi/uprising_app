@@ -87,16 +87,50 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     .eq('id', current.id);
   if (updErr) return NextResponse.json({ error: `DB update: ${updErr.message}` }, { status: 500 });
 
-  // Audit log to ledger (non-balance change but useful for history)
-  await supabase.from('ledger').insert({
-    customer_id: current.id,
-    grant_id: null,
-    type: 'adjust',
-    amount: 0,
-    description: 'Profile fields updated: ' + Object.keys(updates).join(', '),
-    created_by: user.id,
-    created_by_email: user.email,
-  });
+  // Audit log to change_log — one entry per changed field. Ledger stays
+  // focused on balance-impacting events (issue/redeem/expire/adjust).
+  const changes: Array<{
+    customer_id: string;
+    field: string;
+    old_value: string | null;
+    new_value: string | null;
+    created_by: string;
+    created_by_email: string | null;
+  }> = [];
+
+  if (newEmail !== null) {
+    changes.push({
+      customer_id: current.id,
+      field: 'email',
+      old_value: current.email,
+      new_value: newEmail,
+      created_by: user.id,
+      created_by_email: user.email ?? null,
+    });
+  }
+  if (newLoyaltyCode !== null) {
+    changes.push({
+      customer_id: current.id,
+      field: 'loyalty_card_code',
+      old_value: current.loyalty_card_code,
+      new_value: newLoyaltyCode,
+      created_by: user.id,
+      created_by_email: user.email ?? null,
+    });
+  }
+  if (newExpiration !== null) {
+    changes.push({
+      customer_id: current.id,
+      field: 'expiration_date',
+      old_value: current.expiration_date,
+      new_value: newExpiration,
+      created_by: user.id,
+      created_by_email: user.email ?? null,
+    });
+  }
+  if (changes.length > 0) {
+    await supabase.from('change_log').insert(changes);
+  }
 
   // Sync to Klaviyo where relevant
   const klaviyoProperties: Record<string, unknown> = {};

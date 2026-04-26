@@ -4,14 +4,8 @@ import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 
 const ADJUST_REASONS = [
-  'Customer service goodwill',
-  'Refund or make-good',
-  'Promotion or contest',
-  'Trade-in credit',
-  'Rise migration correction',
-  'Data entry correction',
-  'Bonus credit',
-  'Manual debit (correction)',
+  'Manual credit increase',
+  'Manual credit decrease',
   'Other',
 ];
 

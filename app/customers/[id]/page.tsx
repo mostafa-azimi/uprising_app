@@ -62,7 +62,7 @@ export default async function CustomerDetail({ params }: { params: Params }) {
 
   if (!customer) return notFound();
 
-  const [{ data: grants }, { data: ledger }] = await Promise.all([
+  const [{ data: grants }, { data: ledger }, { data: changeLog }] = await Promise.all([
     supabase
       .from('grants')
       .select('id, initial_amount, remaining_amount, expires_on, status, reason, note, created_at, expired_at, event_id, events:event_id ( name, host )')
@@ -74,6 +74,12 @@ export default async function CustomerDetail({ params }: { params: Params }) {
       .eq('customer_id', params.id)
       .order('created_at', { ascending: false })
       .limit(200),
+    supabase
+      .from('change_log')
+      .select('id, field, old_value, new_value, created_at, created_by_email')
+      .eq('customer_id', params.id)
+      .order('created_at', { ascending: false })
+      .limit(50),
   ]);
 
   const fullName = [customer.first_name, customer.last_name].filter(Boolean).join(' ') || '—';
@@ -155,8 +161,9 @@ export default async function CustomerDetail({ params }: { params: Params }) {
         </details>
       )}
 
-      {/* Ledger */}
-      <h2 className="text-xl font-semibold mt-12 mb-3">Ledger ({(ledger ?? []).length})</h2>
+      {/* Ledger — money-impacting events only */}
+      <h2 className="text-xl font-semibold mt-12 mb-1">Ledger ({(ledger ?? []).length})</h2>
+      <p className="text-sm text-muted mb-3">Balance-impacting events: issues, redemptions, expirations, manual adjustments.</p>
       {(!ledger || ledger.length === 0) ? (
         <div className="p-6 text-center text-muted border border-dashed border-line rounded-xl bg-white text-sm">
           No ledger entries yet.
@@ -187,6 +194,42 @@ export default async function CustomerDetail({ params }: { params: Params }) {
                      l.shopify_transaction_id ? `txn:${l.shopify_transaction_id.split('/').pop()}` :
                      '—'}
                   </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Change history — non-balance edits to profile fields */}
+      <h2 className="text-xl font-semibold mt-12 mb-1">Change history ({(changeLog ?? []).length})</h2>
+      <p className="text-sm text-muted mb-3">Edits to profile fields (email, loyalty card code, expiration date display). Doesn't affect balance.</p>
+      {(!changeLog || changeLog.length === 0) ? (
+        <div className="p-6 text-center text-muted border border-dashed border-line rounded-xl bg-white text-sm">
+          No profile changes yet.
+        </div>
+      ) : (
+        <div className="border border-line rounded-xl bg-white overflow-hidden">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-muted bg-slate-50 border-b border-line">
+                <th className="py-2 px-4 font-medium">When</th>
+                <th className="py-2 px-4 font-medium">Field</th>
+                <th className="py-2 px-4 font-medium">Old → new</th>
+                <th className="py-2 px-4 font-medium">By</th>
+              </tr>
+            </thead>
+            <tbody>
+              {changeLog.map((c) => (
+                <tr key={c.id} className="border-b border-line last:border-0">
+                  <td className="py-2 px-4 text-xs text-muted whitespace-nowrap">{fmtDateTime(c.created_at)}</td>
+                  <td className="py-2 px-4 font-mono text-xs">{c.field}</td>
+                  <td className="py-2 px-4 text-xs">
+                    <span className="text-muted line-through">{c.old_value ?? '∅'}</span>
+                    <span className="mx-1.5">→</span>
+                    <span className="text-ink">{c.new_value ?? '∅'}</span>
+                  </td>
+                  <td className="py-2 px-4 text-xs text-muted">{c.created_by_email ?? 'system'}</td>
                 </tr>
               ))}
             </tbody>
