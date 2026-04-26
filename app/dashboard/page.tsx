@@ -53,7 +53,11 @@ export default async function DashboardPage() {
         </Link>
         <Link href="/ledger" className="block p-6 border border-line rounded-xl bg-white hover:border-ink transition">
           <h2 className="font-semibold mb-1">Ledger</h2>
-          <p className="text-sm text-muted">Full audit log of every balance change. Filter by type, email, date.</p>
+          <p className="text-sm text-muted">Balance-impacting events: issues, redemptions, expirations, manual adjustments.</p>
+        </Link>
+        <Link href="/change-log" className="block p-6 border border-line rounded-xl bg-white hover:border-ink transition">
+          <h2 className="font-semibold mb-1">Change log</h2>
+          <p className="text-sm text-muted">Profile-field edits: email, loyalty code, expiration date display. Doesn't affect balance.</p>
         </Link>
         <Link href="/events" className="block p-6 border border-line rounded-xl bg-white hover:border-ink transition">
           <h2 className="font-semibold mb-1">Events</h2>

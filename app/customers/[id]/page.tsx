@@ -203,9 +203,17 @@ export default async function CustomerDetail({ params }: { params: Params }) {
         </div>
       )}
 
-      {/* Change history — non-balance edits to profile fields */}
-      <h2 className="text-xl font-semibold mt-12 mb-1">Change history ({(changeLog ?? []).length})</h2>
-      <p className="text-sm text-muted mb-3">Edits to profile fields (email, loyalty card code, expiration date display). Doesn't affect balance.</p>
+      {/* Compact change history with deeplink to the full page */}
+      <div className="mt-12 flex items-baseline justify-between">
+        <h2 className="text-xl font-semibold">Recent profile changes ({(changeLog ?? []).length})</h2>
+        <Link
+          href={`/change-log?email=${encodeURIComponent(customer.email)}`}
+          className="text-sm text-ink hover:underline"
+        >
+          View full change log →
+        </Link>
+      </div>
+      <p className="text-sm text-muted mb-3">Edits to email, loyalty card code, expiration date. Doesn't affect balance.</p>
       {(!changeLog || changeLog.length === 0) ? (
         <div className="p-6 text-center text-muted border border-dashed border-line rounded-xl bg-white text-sm">
           No profile changes yet.
@@ -222,7 +230,7 @@ export default async function CustomerDetail({ params }: { params: Params }) {
               </tr>
             </thead>
             <tbody>
-              {changeLog.map((c) => (
+              {changeLog.slice(0, 10).map((c) => (
                 <tr key={c.id} className="border-b border-line last:border-0">
                   <td className="py-2 px-4 text-xs text-muted whitespace-nowrap">{fmtDateTime(c.created_at)}</td>
                   <td className="py-2 px-4 font-mono text-xs">{c.field}</td>
