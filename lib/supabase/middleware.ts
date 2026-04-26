@@ -7,6 +7,7 @@ const PUBLIC_PATHS = [
   '/_next',
   '/favicon.ico',
   '/api/webhooks',  // Shopify webhooks authenticate via HMAC, not Supabase auth
+  '/api/cron',      // Vercel Cron authenticates via CRON_SECRET bearer token
 ];
 
 export async function updateSession(request: NextRequest) {

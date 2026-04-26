@@ -131,6 +131,202 @@ export async function expireCustomerBalance(customerId: string, reason = 'Manual
 }
 
 /**
+ * Auto-expire any grant whose expires_on is past the cutoff (default = today).
+ * Per customer: sums all eligible grants, debits Shopify ONCE for the total,
+ * marks all those grants expired in our DB, writes one ledger row per grant,
+ * recomputes the customer's balance, and pushes the new balance to Klaviyo.
+ *
+ * Idempotent — safe to run multiple times. Designed to be triggered daily by
+ * Vercel Cron, with an admin-callable button for manual catch-up.
+ */
+export interface AutoExpireResult {
+  cutoff_date: string;
+  customers_processed: number;
+  grants_expired: number;
+  total_amount_expired: number;
+  duration_ms: number;
+  errors: Array<{ email: string; error: string }>;
+}
+
+export async function expireGrantsPastDate(args: {
+  cutoffISO?: string;       // YYYY-MM-DD; default today (local UTC date)
+  actorEmail?: string;      // who triggered this (for audit)
+}): Promise<AutoExpireResult> {
+  const t0 = Date.now();
+  const cutoff = args.cutoffISO ?? new Date().toISOString().slice(0, 10);
+  const supabase = createSupabaseServiceClient();
+
+  // 1. Find every active grant past the cutoff with a positive remaining amount
+  const expiredGrants: Array<{
+    id: string;
+    customer_id: string;
+    remaining_amount: number;
+    expires_on: string;
+  }> = [];
+  let from = 0;
+  const PAGE = 1000;
+  while (true) {
+    const { data, error } = await supabase
+      .from('grants')
+      .select('id, customer_id, remaining_amount, expires_on')
+      .eq('status', 'active')
+      .lt('expires_on', cutoff)
+      .gt('remaining_amount', 0)
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`grants query: ${error.message}`);
+    if (!data || data.length === 0) break;
+    for (const g of data) {
+      expiredGrants.push({
+        id: g.id,
+        customer_id: g.customer_id,
+        remaining_amount: Number(g.remaining_amount),
+        expires_on: g.expires_on,
+      });
+    }
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+
+  if (expiredGrants.length === 0) {
+    return {
+      cutoff_date: cutoff,
+      customers_processed: 0,
+      grants_expired: 0,
+      total_amount_expired: 0,
+      duration_ms: Date.now() - t0,
+      errors: [],
+    };
+  }
+
+  // 2. Group grants by customer
+  const byCustomer = new Map<string, typeof expiredGrants>();
+  for (const g of expiredGrants) {
+    const list = byCustomer.get(g.customer_id) ?? [];
+    list.push(g);
+    byCustomer.set(g.customer_id, list);
+  }
+
+  const errors: Array<{ email: string; error: string }> = [];
+  let totalExpired = 0;
+  let grantsExpired = 0;
+  let customersProcessed = 0;
+
+  // 3. Process each customer with controlled concurrency
+  const CONCURRENCY = 5;
+  const customerEntries = Array.from(byCustomer.entries());
+
+  async function processCustomer(customerId: string, grants: typeof expiredGrants): Promise<void> {
+    // Pull customer details
+    const { data: customer, error: cErr } = await supabase
+      .from('customers')
+      .select('id, email, first_name, last_name, total_balance_cached, loyalty_card_code, shopify_gift_card_id')
+      .eq('id', customerId)
+      .maybeSingle();
+    if (cErr || !customer) {
+      errors.push({ email: '?', error: cErr?.message ?? 'customer not found' });
+      return;
+    }
+
+    const totalToDebit = grants.reduce((s, g) => s + g.remaining_amount, 0);
+
+    // 3a. Debit Shopify once for the total
+    if (customer.shopify_gift_card_id && totalToDebit > 0) {
+      try {
+        const earliestExpiry = grants.map((g) => g.expires_on).sort()[0];
+        await giftCardDebit(
+          customer.shopify_gift_card_id,
+          totalToDebit.toFixed(2),
+          `Auto-expire: ${grants.length} grant(s) past ${earliestExpiry}`
+        );
+      } catch (e) {
+        await supabase.from('sync_log').insert({
+          target: 'shopify',
+          operation: 'auto_expire_debit',
+          entity_id: customer.id,
+          ok: false,
+          error_message: (e as Error).message,
+          request_body: { totalToDebit, grant_ids: grants.map((g) => g.id) },
+        });
+        errors.push({ email: customer.email, error: `Shopify: ${(e as Error).message}` });
+        return;
+      }
+    }
+
+    // 3b. Mark grants expired (one bulk update)
+    const grantIds = grants.map((g) => g.id);
+    const { error: gErr } = await supabase
+      .from('grants')
+      .update({ status: 'expired', remaining_amount: 0, expired_at: new Date().toISOString() })
+      .in('id', grantIds);
+    if (gErr) {
+      errors.push({ email: customer.email, error: `grants update: ${gErr.message}` });
+      return;
+    }
+
+    // 3c. Insert ledger rows (one per grant)
+    const ledgerRows = grants.map((g) => ({
+      customer_id: customer.id,
+      grant_id: g.id,
+      type: 'expire' as const,
+      amount: -g.remaining_amount,
+      description: `Auto-expire — past expires_on ${g.expires_on}`,
+      created_by_email: args.actorEmail ?? 'cron',
+    }));
+    await supabase.from('ledger').insert(ledgerRows);
+
+    // 3d. Recompute cached balance + next-expiration
+    const newBalance = await recomputeBalance(customer.id);
+    const { data: nextActive } = await supabase
+      .from('grants')
+      .select('expires_on')
+      .eq('customer_id', customer.id)
+      .eq('status', 'active')
+      .order('expires_on', { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    await supabase
+      .from('customers')
+      .update({
+        total_balance_cached: newBalance,
+        expiration_date: nextActive?.expires_on ?? null,
+      })
+      .eq('id', customer.id);
+
+    // 3e. Push new balance + expiration_date to Klaviyo
+    try {
+      await upsertProfile({
+        email: customer.email,
+        first_name: customer.first_name ?? undefined,
+        last_name: customer.last_name ?? undefined,
+        properties: {
+          loyalty_card_balance: newBalance,
+          loyalty_card_code: customer.loyalty_card_code ?? undefined,
+          expiration_date: nextActive?.expires_on ?? '',
+        },
+      });
+    } catch {/* non-fatal */}
+
+    totalExpired += totalToDebit;
+    grantsExpired += grants.length;
+    customersProcessed += 1;
+  }
+
+  for (let i = 0; i < customerEntries.length; i += CONCURRENCY) {
+    const slice = customerEntries.slice(i, i + CONCURRENCY);
+    await Promise.all(slice.map(([id, grants]) => processCustomer(id, grants)));
+  }
+
+  return {
+    cutoff_date: cutoff,
+    customers_processed: customersProcessed,
+    grants_expired: grantsExpired,
+    total_amount_expired: Math.round(totalExpired * 100) / 100,
+    duration_ms: Date.now() - t0,
+    errors,
+  };
+}
+
+/**
  * Apply a manual adjustment (credit or debit) to a customer's balance.
  *   amount > 0 → credit (add) the customer's gift card
  *   amount < 0 → debit (remove) — reduces FIFO from active grants

@@ -1,5 +1,7 @@
 import Link from 'next/link';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
+import { getSignedInUser } from '@/lib/auth';
+import { ExpireNowButton } from './expire-now-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,6 +34,8 @@ function fmtMonthLabel(d: Date): string {
 
 export default async function ExpirationsReportPage() {
   const supabase = createSupabaseServerClient();
+  const me = await getSignedInUser();
+  const isAdmin = me?.role === 'admin';
 
   const now = new Date();
   const weekStart = startOfWeek(now);
@@ -124,7 +128,17 @@ export default async function ExpirationsReportPage() {
     <main className="min-h-screen px-8 py-10 max-w-5xl mx-auto">
       <Link href="/dashboard" className="text-sm text-muted hover:text-ink">← Dashboard</Link>
       <h1 className="text-3xl font-bold mt-2 mb-1">Expirations report</h1>
-      <p className="text-sm text-muted mb-8">Money already expired and upcoming over the next 8 calendar months.</p>
+      <p className="text-sm text-muted mb-6">Money already expired and upcoming over the next 8 calendar months.</p>
+
+      {isAdmin && (
+        <section className="mb-8 border border-line rounded-xl bg-white p-5">
+          <h2 className="font-semibold mb-1">Manual expiration sweep</h2>
+          <p className="text-xs text-muted mb-3">
+            Daily cron runs at 7:00 UTC (3am ET / 2am EDT). Use this to catch up on demand.
+          </p>
+          <ExpireNowButton />
+        </section>
+      )}
 
       <section className="grid sm:grid-cols-3 gap-3 mb-8">
         <Stat label="Expired this week" value={`$${weekExpiredTotal.toFixed(2)}`} accent={weekExpiredTotal > 0 ? 'warn' : 'neutral'} />
