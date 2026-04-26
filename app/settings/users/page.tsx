@@ -31,7 +31,7 @@ export default async function UsersPage() {
       email: (u.email ?? '').toLowerCase(),
       role: (meta?.role ?? 'none') as 'admin' | 'viewer' | 'none',
       signed_up: u.created_at,
-      last_sign_in: u.last_sign_in_at,
+      last_sign_in: u.last_sign_in_at ?? null,
       confirmed: !!u.email_confirmed_at,
     };
   }).sort((a, b) => {
