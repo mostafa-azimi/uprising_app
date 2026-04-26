@@ -59,9 +59,17 @@ export default async function CustomersPage({ searchParams }: { searchParams: Se
     <main className="min-h-screen px-8 py-10 max-w-6xl mx-auto">
       <Link href="/dashboard" className="text-sm text-muted hover:text-ink">← Dashboard</Link>
       <h1 className="text-3xl font-bold mt-2 mb-1">Customers</h1>
-      <p className="text-sm text-muted mb-6">
-        {totalCount.toLocaleString()} total · showing {totalCount === 0 ? 0 : offset + 1}–{Math.min(offset + PAGE_SIZE, totalCount)} on page {page} of {totalPages}
-      </p>
+      <div className="flex items-baseline justify-between mb-6 gap-3 flex-wrap">
+        <p className="text-sm text-muted">
+          {totalCount.toLocaleString()} total · showing {totalCount === 0 ? 0 : offset + 1}–{Math.min(offset + PAGE_SIZE, totalCount)} on page {page} of {totalPages}
+        </p>
+        <a
+          href={`/api/admin/export/customers${q ? `?q=${encodeURIComponent(q)}` : ''}`}
+          className="text-sm border border-line bg-white hover:border-ink rounded-lg px-3 py-1.5"
+        >
+          Download CSV
+        </a>
+      </div>
 
       <form className="flex flex-wrap gap-3 mb-6">
         <input

@@ -114,10 +114,23 @@ export default async function LedgerPage({ searchParams }: { searchParams: Searc
     <main className="min-h-screen px-8 py-10 max-w-7xl mx-auto">
       <Link href="/dashboard" className="text-sm text-muted hover:text-ink">← Dashboard</Link>
       <h1 className="text-3xl font-bold mt-2 mb-1">Ledger</h1>
-      <p className="text-sm text-muted mb-6">
-        Append-only log of every balance change. {totalCount.toLocaleString()} entries
-        {totalCount > 0 && ` · showing ${offset + 1}–${Math.min(offset + PAGE_SIZE, totalCount)} on page ${page} of ${totalPages}`}.
-      </p>
+      <div className="flex items-baseline justify-between mb-6 gap-3 flex-wrap">
+        <p className="text-sm text-muted">
+          Append-only log of every balance change. {totalCount.toLocaleString()} entries
+          {totalCount > 0 && ` · showing ${offset + 1}–${Math.min(offset + PAGE_SIZE, totalCount)} on page ${page} of ${totalPages}`}.
+        </p>
+        <a
+          href={`/api/admin/export/ledger?${new URLSearchParams({
+            ...(type !== 'all' ? { type } : {}),
+            ...(emailFilter ? { email: emailFilter } : {}),
+            ...(from ? { from } : {}),
+            ...(to ? { to } : {}),
+          }).toString()}`}
+          className="text-sm border border-line bg-white hover:border-ink rounded-lg px-3 py-1.5"
+        >
+          Download CSV
+        </a>
+      </div>
 
       <form className="grid sm:grid-cols-5 gap-3 mb-6 items-end">
         <div>

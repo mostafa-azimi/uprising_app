@@ -23,6 +23,8 @@ export default async function SettingsPage() {
 
       <h2 className="text-lg font-semibold mb-3">Integrations</h2>
       <section className="grid sm:grid-cols-2 gap-4 mb-10">
+        <Card href="/settings/connections/shopify" title="Shopify" desc="Config display + resync gift card balances from Shopify." />
+        <Card href="/settings/connections/klaviyo" title="Klaviyo" desc="Config display + push current customer state to Klaviyo." />
         <Card href="/test-connections" title="Test connections" desc="Verify Supabase, Shopify, and Klaviyo are reachable." />
         <Card href="/admin/migrate" title="Migrate from Rise" desc="Upload Shopify gift cards + Klaviyo profiles, marry them up." />
       </section>

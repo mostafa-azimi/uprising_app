@@ -50,6 +50,25 @@ export async function requestPasswordReset(formData: FormData) {
   redirect('/login?mode=forgot&sent=1');
 }
 
+export async function signUpWithPassword(formData: FormData) {
+  const email = String(formData.get('email') ?? '').trim().toLowerCase();
+  const password = String(formData.get('password') ?? '');
+  if (!email || !password) redirect('/login?mode=signup&error=Email%20and%20password%20required');
+  if (password.length < 8) redirect('/login?mode=signup&error=Password%20must%20be%20at%20least%208%20characters');
+
+  const supabase = createSupabaseServerClient();
+  const origin = headers().get('origin') ?? process.env.APP_URL ?? 'http://localhost:3000';
+
+  const { error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { emailRedirectTo: `${origin}/auth/callback` },
+  });
+
+  if (error) redirect(`/login?mode=signup&error=${encodeURIComponent(error.message)}`);
+  redirect('/login?mode=signup&sent=1');
+}
+
 export async function signOut() {
   const supabase = createSupabaseServerClient();
   await supabase.auth.signOut();
