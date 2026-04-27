@@ -64,6 +64,7 @@ export function CustomersTable({
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [bulkSkipShopify, setBulkSkipShopify] = useState(false);
   const [busy, setBusy] = useState(false);
   const [busyMessage, setBusyMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -119,7 +120,7 @@ export function CustomersTable({
       const res = await fetch('/api/customers/bulk-expire', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ customerIds: Array.from(selected) }),
+        body: JSON.stringify({ customerIds: Array.from(selected), skipShopify: bulkSkipShopify }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -291,12 +292,24 @@ export function CustomersTable({
             <p className="text-sm text-muted mb-4">
               This will:
             </p>
-            <ul className="text-sm text-muted list-disc pl-5 mb-5 space-y-1">
-              <li>Debit each customer's Shopify gift card to <strong>$0</strong></li>
+            <ul className="text-sm text-muted list-disc pl-5 mb-4 space-y-1">
+              {!bulkSkipShopify && <li>Debit each customer's Shopify gift card to <strong>$0</strong></li>}
               <li>Mark all active grants as expired in our database</li>
               <li>Update each Klaviyo profile's <code>loyalty_card_balance</code> to <code>0</code></li>
               <li>Write ledger entries (audit trail)</li>
             </ul>
+            <label className="flex items-start gap-2 text-xs text-muted mb-4 cursor-pointer p-3 bg-amber-50 border border-amber-200 rounded-lg">
+              <input
+                type="checkbox"
+                checked={bulkSkipShopify}
+                onChange={(e) => setBulkSkipShopify(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <strong>Skip Shopify sync</strong> — only update our DB and Klaviyo. Use when Shopify gift cards are already $0
+                (e.g., they were expired in Shopify before this app knew about them) and you're just bringing our records into alignment.
+              </span>
+            </label>
             <p className="text-sm font-semibold text-bad mb-5">This cannot be undone.</p>
             <div className="flex justify-end gap-2">
               <button

@@ -74,7 +74,12 @@ export function AutoExpireToggle({
       </p>
       {updatedAt && (
         <p className="text-xs text-muted italic">
-          Last changed {new Date(updatedAt).toLocaleString('en-US', { timeZone: 'America/New_York', dateStyle: 'short', timeStyle: 'short', timeZoneName: 'short' })}{updatedByEmail ? ` by ${updatedByEmail}` : ''}.
+          Last changed {new Date(updatedAt).toLocaleString('en-US', {
+            timeZone: 'America/New_York',
+            year: 'numeric', month: 'short', day: 'numeric',
+            hour: 'numeric', minute: '2-digit',
+            timeZoneName: 'short',
+          })}{updatedByEmail ? ` by ${updatedByEmail}` : ''}.
         </p>
       )}
       {error && <p className="text-sm text-bad">{error}</p>}

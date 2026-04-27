@@ -18,8 +18,9 @@ export async function POST(request: NextRequest) {
     .maybeSingle();
   if (!admin) return NextResponse.json({ error: 'Forbidden — not an admin' }, { status: 403 });
 
-  const body = await request.json().catch(() => ({})) as { customerIds?: string[] };
+  const body = await request.json().catch(() => ({})) as { customerIds?: string[]; skipShopify?: boolean };
   const ids = (body.customerIds ?? []).filter((x) => typeof x === 'string' && x.length > 0);
+  const skipShopify = body.skipShopify === true;
   if (ids.length === 0) {
     return NextResponse.json({ error: 'No customerIds provided' }, { status: 400 });
   }
@@ -27,7 +28,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Maximum 200 customers per bulk-expire (was ' + ids.length + ')' }, { status: 400 });
   }
 
-  const reason = `Bulk expire by ${user.email ?? user.id}`;
+  const reason = `Bulk expire by ${user.email ?? user.id}${skipShopify ? ' (DB only — Shopify skipped)' : ''}`;
   const results: ExpireResult[] = [];
   let totalDebited = 0;
   let succeeded = 0;
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest) {
   for (let i = 0; i < ids.length; i += CONCURRENCY) {
     const slice = ids.slice(i, i + CONCURRENCY);
     const batch = await Promise.all(
-      slice.map((id) => expireCustomerBalance(id, reason, { id: user.id, email: user.email ?? null }))
+      slice.map((id) => expireCustomerBalance(id, reason, { id: user.id, email: user.email ?? null }, { skipShopify }))
     );
     for (const r of batch) {
       results.push(r);

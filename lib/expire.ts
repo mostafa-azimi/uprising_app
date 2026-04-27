@@ -25,7 +25,12 @@ export interface ExpireResult {
  *   - Insert ledger 'expire' rows
  *   - Update Klaviyo loyalty_card_balance to 0
  */
-export async function expireCustomerBalance(customerId: string, reason = 'Manual expire', actor?: { id: string; email?: string | null }): Promise<ExpireResult> {
+export async function expireCustomerBalance(
+  customerId: string,
+  reason = 'Manual expire',
+  actor?: { id: string; email?: string | null },
+  options?: { skipShopify?: boolean }
+): Promise<ExpireResult> {
   const supabase = createSupabaseServiceClient();
 
   const { data: customer, error: cErr } = await supabase
@@ -42,9 +47,11 @@ export async function expireCustomerBalance(customerId: string, reason = 'Manual
     return { email: customer.email, customer_id: customerId, prior_balance: 0, new_balance: 0, shopify_debited: 0, ok: true };
   }
 
-  // 1. Debit Shopify
+  // 1. Debit Shopify (skipped when caller explicitly opts out — used when
+  // the Shopify gift card balance is already correct or has been manually
+  // zeroed out and we just need to bring our DB in line).
   let debited = 0;
-  if (customer.shopify_gift_card_id) {
+  if (!options?.skipShopify && customer.shopify_gift_card_id) {
     try {
       await giftCardDebit(customer.shopify_gift_card_id, priorBalance.toFixed(2), `${reason} — full balance expire`);
       debited = priorBalance;
@@ -337,6 +344,7 @@ export async function adjustCustomerBalance(args: {
   reason: string;
   expiresOn?: string;        // YYYY-MM-DD; only used for credits, default 1y from today
   actor?: { id: string; email?: string | null };
+  skipShopify?: boolean;     // when true, only update our DB + Klaviyo
 }): Promise<{ ok: boolean; new_balance: number; error?: string }> {
   const { customerId, amount, reason } = args;
   if (amount === 0) return { ok: false, new_balance: 0, error: 'amount must be nonzero' };
@@ -349,16 +357,19 @@ export async function adjustCustomerBalance(args: {
     .maybeSingle();
   if (cErr || !customer) return { ok: false, new_balance: 0, error: cErr?.message ?? 'customer not found' };
 
-  if (!customer.shopify_gift_card_id) {
+  // Only require a linked Shopify gift card if we plan to actually call Shopify
+  if (!args.skipShopify && !customer.shopify_gift_card_id) {
     return { ok: false, new_balance: 0, error: 'Customer has no linked Shopify gift card' };
   }
 
   if (amount > 0) {
     // Credit path — add to gift card and create a synthetic grant
-    try {
-      await giftCardCredit(customer.shopify_gift_card_id, amount.toFixed(2), reason);
-    } catch (e) {
-      return { ok: false, new_balance: Number(customer.total_balance_cached ?? 0), error: `Shopify: ${(e as Error).message}` };
+    if (!args.skipShopify && customer.shopify_gift_card_id) {
+      try {
+        await giftCardCredit(customer.shopify_gift_card_id, amount.toFixed(2), reason);
+      } catch (e) {
+        return { ok: false, new_balance: Number(customer.total_balance_cached ?? 0), error: `Shopify: ${(e as Error).message}` };
+      }
     }
 
     // Find or create a "Manual Adjustments" event
@@ -407,10 +418,12 @@ export async function adjustCustomerBalance(args: {
   } else {
     // Debit path — reduce FIFO from active grants
     const debit = Math.abs(amount);
-    try {
-      await giftCardDebit(customer.shopify_gift_card_id, debit.toFixed(2), reason);
-    } catch (e) {
-      return { ok: false, new_balance: Number(customer.total_balance_cached ?? 0), error: `Shopify: ${(e as Error).message}` };
+    if (!args.skipShopify && customer.shopify_gift_card_id) {
+      try {
+        await giftCardDebit(customer.shopify_gift_card_id, debit.toFixed(2), reason);
+      } catch (e) {
+        return { ok: false, new_balance: Number(customer.total_balance_cached ?? 0), error: `Shopify: ${(e as Error).message}` };
+      }
     }
 
     let remaining = debit;

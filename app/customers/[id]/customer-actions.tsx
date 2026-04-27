@@ -40,6 +40,10 @@ export function CustomerActions({
   const [editBusy, setEditBusy] = useState(false);
   const [confirmEmailChange, setConfirmEmailChange] = useState(false);
 
+  // Skip-Shopify toggles per action
+  const [adjustSkipShopify, setAdjustSkipShopify] = useState(false);
+  const [expireSkipShopify, setExpireSkipShopify] = useState(false);
+
   function reset() {
     setError(null);
     setSuccess(null);
@@ -90,7 +94,11 @@ export function CustomerActions({
     setBusy(true);
     setConfirmExpire(false);
     try {
-      const res = await fetch(`/api/customers/${customerId}/expire`, { method: 'POST' });
+      const res = await fetch(`/api/customers/${customerId}/expire`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skipShopify: expireSkipShopify }),
+      });
       const json = await res.json();
       if (!res.ok) {
         setError(json.error ?? `${res.status} ${res.statusText}`);
@@ -128,6 +136,7 @@ export function CustomerActions({
           amount,
           reason,
           expiresOn: adjustExpires || undefined,
+          skipShopify: adjustSkipShopify,
         }),
       });
       const json = await res.json();
@@ -239,6 +248,16 @@ export function CustomerActions({
               className="w-full border border-line rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-ink"
             />
             <p className="text-xs text-muted">Optional expiration (only used for credits). Default: 1 year from today.</p>
+            <label className="flex items-center gap-2 text-xs text-muted py-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={adjustSkipShopify}
+                onChange={(e) => setAdjustSkipShopify(e.target.checked)}
+              />
+              <span>
+                <strong>Skip Shopify sync</strong> — only update our DB and Klaviyo (use when Shopify is already correct).
+              </span>
+            </label>
             <button
               onClick={applyAdjust}
               disabled={busy}
@@ -258,6 +277,16 @@ export function CustomerActions({
           <p className="text-sm mb-3">
             Current balance: <strong>${currentBalance.toFixed(2)}</strong>
           </p>
+          <label className="flex items-center gap-2 text-xs text-muted py-1 mb-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={expireSkipShopify}
+              onChange={(e) => setExpireSkipShopify(e.target.checked)}
+            />
+            <span>
+              <strong>Skip Shopify sync</strong> — only update our DB and Klaviyo (use when Shopify is already $0).
+            </span>
+          </label>
           <button
             onClick={() => setConfirmExpire(true)}
             disabled={busy || currentBalance <= 0}
@@ -303,7 +332,10 @@ export function CustomerActions({
           <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6">
             <h2 className="text-lg font-bold mb-2">Expire balance for {email}?</h2>
             <p className="text-sm text-muted mb-4">
-              This will zero out <strong>${currentBalance.toFixed(2)}</strong> in Shopify, mark all active grants expired, and update Klaviyo.
+              This will mark all active grants expired and update Klaviyo to <strong>$0</strong>.
+              {expireSkipShopify
+                ? <> <strong className="text-bad">Shopify will NOT be debited</strong> (skip enabled — use when Shopify already shows $0).</>
+                : <> Shopify will be debited <strong>${currentBalance.toFixed(2)}</strong>.</>}
             </p>
             <p className="text-sm font-semibold text-bad mb-5">This cannot be undone.</p>
             <div className="flex justify-end gap-2">
