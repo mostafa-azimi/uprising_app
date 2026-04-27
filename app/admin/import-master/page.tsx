@@ -55,8 +55,9 @@ export default function ImportMasterPage() {
       <p className="text-sm text-muted mb-6">
         One-shot importer for the Rise master export (one row per Shopify gift card).
         Upserts customers, creates one grant per non-disabled row with balance &gt; 0,
-        and sets each grant's expiration to <strong>6 months after</strong> its <code>created_at</code>.
-        Disabled or zero-balance rows just create the customer record.
+        and sets every grant's expiration to <strong>today + 6 months</strong> (clean slate —
+        no retroactive expiration). The CSV's <code>created_at</code> is preserved on
+        each grant for history. Disabled or zero-balance rows just create the customer record.
       </p>
 
       <section className="border border-line rounded-xl bg-amber-50 border-amber-200 p-4 mb-6 text-sm">
