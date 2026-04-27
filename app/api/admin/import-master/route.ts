@@ -96,15 +96,6 @@ export async function POST(request: NextRequest) {
 
   const supabase = createSupabaseServiceClient();
 
-  // All grants in this import expire on the same day: today + 6 months.
-  // Clean slate — `created_at` is preserved on the row for history but does
-  // not drive expiration retroactively.
-  const importExpires = (() => {
-    const d = new Date();
-    d.setUTCMonth(d.getUTCMonth() + 6);
-    return d.toISOString().slice(0, 10);
-  })();
-
   // 1. Upsert one "Master Migration" event row to attribute these grants to
   const { data: existingEvent } = await supabase
     .from('events')
@@ -168,7 +159,7 @@ export async function POST(request: NextRequest) {
     const balance = parseDecimal(r.balance);
     const createdAtDate = parseCreatedAt(r.created_at);
     const createdAtIso = createdAtDate ? createdAtDate.toISOString() : new Date().toISOString();
-    const expires = importExpires;  // uniform: today + 6 months
+    const expires = createdAtDate ? addMonthsISO(createdAtDate, 6) : addMonthsISO(new Date(), 6);
     const isDisabled = !!clean(r.disabled_at) || !!clean(r.deleted_at);
 
     // Customer entry — we keep the latest non-disabled card with the largest

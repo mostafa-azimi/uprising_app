@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getSignedInUser } from '@/lib/auth';
 import { ExpireNowButton } from './expire-now-button';
+import { AutoExpireToggle } from './auto-expire-toggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +37,16 @@ export default async function ExpirationsReportPage() {
   const supabase = createSupabaseServerClient();
   const me = await getSignedInUser();
   const isAdmin = me?.role === 'admin';
+
+  // Read auto-expire setting (default false if missing)
+  const { data: setting } = await supabase
+    .from('app_settings')
+    .select('value, updated_at, updated_by_email')
+    .eq('key', 'auto_expire_enabled')
+    .maybeSingle();
+  const autoExpireEnabled = setting?.value === true;
+  const settingUpdatedAt = setting?.updated_at ?? null;
+  const settingUpdatedBy = setting?.updated_by_email ?? null;
 
   const now = new Date();
   const weekStart = startOfWeek(now);
@@ -131,13 +142,23 @@ export default async function ExpirationsReportPage() {
       <p className="text-sm text-muted mb-6">Money already expired and upcoming over the next 8 calendar months.</p>
 
       {isAdmin && (
-        <section className="mb-8 border border-line rounded-xl bg-white p-5">
-          <h2 className="font-semibold mb-1">Manual expiration sweep</h2>
-          <p className="text-xs text-muted mb-3">
-            Daily cron runs at 7:00 UTC (3am ET / 2am EDT). Use this to catch up on demand.
-          </p>
-          <ExpireNowButton />
-        </section>
+        <>
+          <section className="mb-6 border border-line rounded-xl bg-white p-5">
+            <h2 className="font-semibold mb-3">Auto-expiration setting</h2>
+            <AutoExpireToggle
+              initialEnabled={autoExpireEnabled}
+              updatedAt={settingUpdatedAt}
+              updatedByEmail={settingUpdatedBy}
+            />
+          </section>
+          <section className="mb-8 border border-line rounded-xl bg-white p-5">
+            <h2 className="font-semibold mb-1">Manual expiration sweep</h2>
+            <p className="text-xs text-muted mb-3">
+              Always available — runs the same logic as the cron, regardless of the toggle above.
+            </p>
+            <ExpireNowButton />
+          </section>
+        </>
       )}
 
       <section className="grid sm:grid-cols-3 gap-3 mb-8">

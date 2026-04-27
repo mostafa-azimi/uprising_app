@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { expireGrantsPastDate } from '@/lib/expire';
+import { createSupabaseServiceClient } from '@/lib/supabase/server';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -27,6 +28,23 @@ export async function GET(request: NextRequest) {
   if (!verifyCron(request)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
+
+  // Respect the auto-expire toggle. If disabled, return 200 with a noop result so
+  // Vercel doesn't flag the cron as failing.
+  const supabase = createSupabaseServiceClient();
+  const { data: setting } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', 'auto_expire_enabled')
+    .maybeSingle();
+  const enabled = setting?.value === true;
+  if (!enabled) {
+    return NextResponse.json({
+      skipped: true,
+      reason: 'auto_expire_enabled is false (toggle on /reports/expirations to enable)',
+    });
+  }
+
   try {
     const result = await expireGrantsPastDate({ actorEmail: 'cron@auto' });
     return NextResponse.json(result);
