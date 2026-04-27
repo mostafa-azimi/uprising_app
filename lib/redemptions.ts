@@ -32,6 +32,7 @@ export async function applyRedemption(args: {
   customerId: string;
   amount: number;
   shopifyOrderId?: string;
+  shopifyGiftCardId?: string;     // when set, debit this specific grant first
   description?: string;
 }): Promise<RedemptionResult> {
   const supabase = createSupabaseServiceClient();
@@ -65,16 +66,30 @@ export async function applyRedemption(args: {
     }
   }
 
-  // Walk active grants oldest-expires-first, debit until the redemption is satisfied
-  const { data: grants } = await supabase
-    .from('grants')
-    .select('id, remaining_amount')
-    .eq('customer_id', customer.id)
-    .eq('status', 'active')
-    .order('expires_on', { ascending: true });
+  // Prefer to debit the SPECIFIC grant whose gift_card was used; if multiple
+  // grants share a card or we have no card id, fall back to FIFO oldest-first.
+  let grants: Array<{ id: string; remaining_amount: number }> = [];
+  if (args.shopifyGiftCardId) {
+    const { data } = await supabase
+      .from('grants')
+      .select('id, remaining_amount')
+      .eq('customer_id', customer.id)
+      .eq('status', 'active')
+      .eq('shopify_gift_card_id', args.shopifyGiftCardId);
+    grants = data ?? [];
+  }
+  if (grants.length === 0) {
+    const { data } = await supabase
+      .from('grants')
+      .select('id, remaining_amount')
+      .eq('customer_id', customer.id)
+      .eq('status', 'active')
+      .order('expires_on', { ascending: true });
+    grants = data ?? [];
+  }
 
   let remaining = amount;
-  for (const g of grants ?? []) {
+  for (const g of grants) {
     if (remaining <= 0) break;
     const grantRemaining = Number(g.remaining_amount);
     if (grantRemaining <= 0) continue;

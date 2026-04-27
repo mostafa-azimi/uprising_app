@@ -26,7 +26,7 @@ export default async function SettingsPage() {
         <Card href="/settings/connections/shopify" title="Shopify" desc="Config display + resync gift card balances from Shopify." />
         <Card href="/settings/connections/klaviyo" title="Klaviyo" desc="Config display + push current customer state to Klaviyo." />
         <Card href="/test-connections" title="Test connections" desc="Verify Supabase, Shopify, and Klaviyo are reachable." />
-        <Card href="/admin/migrate" title="Migrate from Rise" desc="Upload Shopify gift cards + Klaviyo profiles, marry them up." />
+        <Card href="/admin/import-master" title="Import Master Rise file" desc="One-shot CSV importer for the Rise master export. Replaces the old two-file staging tool." />
       </section>
 
       <h2 className="text-lg font-semibold mb-3">Danger zone</h2>

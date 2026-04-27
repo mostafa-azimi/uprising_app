@@ -124,13 +124,25 @@ export async function POST(request: NextRequest) {
 
   let customerId: string | null = null;
 
+  // Look up customer first by the grant's gift_card_id (grants now own gift cards),
+  // then fall back to customers.shopify_gift_card_id (the primary card pointer),
+  // then to order email.
   if (giftCardIds.length > 0) {
-    const { data } = await supabase
-      .from('customers')
-      .select('id')
+    const { data: g } = await supabase
+      .from('grants')
+      .select('customer_id')
       .in('shopify_gift_card_id', giftCardIds)
       .limit(1);
-    if (data && data.length > 0) customerId = data[0].id;
+    if (g && g.length > 0) customerId = g[0].customer_id;
+
+    if (!customerId) {
+      const { data } = await supabase
+        .from('customers')
+        .select('id')
+        .in('shopify_gift_card_id', giftCardIds)
+        .limit(1);
+      if (data && data.length > 0) customerId = data[0].id;
+    }
   }
 
   if (!customerId && email) {
@@ -168,6 +180,7 @@ export async function POST(request: NextRequest) {
     customerId,
     amount: totalGiftCardRedeemed,
     shopifyOrderId: orderId,
+    shopifyGiftCardId: giftCardIds[0] ?? undefined,
     description: `Shopify order redemption${email ? ' — ' + email : ''}`,
   });
 
