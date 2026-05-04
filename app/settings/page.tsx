@@ -27,6 +27,7 @@ export default async function SettingsPage() {
         <Card href="/settings/connections/klaviyo" title="Klaviyo" desc="Config display + push current customer state to Klaviyo." />
         <Card href="/test-connections" title="Test connections" desc="Verify Supabase, Shopify, and Klaviyo are reachable." />
         <Card href="/admin/import-master" title="Import Master Rise file" desc="One-shot CSV importer for the Rise master export. Replaces the old two-file staging tool." />
+        <Card href="/admin/link-gift-cards" title="Link gift cards from Master Rise file" desc="Backfill missing shopify_gift_card_id / loyalty_card_code on existing customers. DB only — no Shopify calls." />
         <Card href="/admin/reconcile-shopify" title="Reconcile from Shopify" desc="Upload a fresh Shopify gift cards export to bring our DB in sync with Shopify's current balances." />
       </section>
 
