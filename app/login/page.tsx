@@ -3,12 +3,27 @@ import { SubmitButton } from '@/components/submit-button';
 
 type Mode = 'password' | 'magic' | 'signup' | 'forgot';
 
-export default function LoginPage({ searchParams }: { searchParams: { sent?: string; error?: string; mode?: string } }) {
+const AUTOFILL_EMAIL = 'mike.azimi@dischub.com';
+
+export default function LoginPage({
+  searchParams,
+}: {
+  searchParams: { sent?: string; error?: string; mode?: string; autofill?: string };
+}) {
   const mode: Mode =
     searchParams.mode === 'magic' ? 'magic' :
     searchParams.mode === 'signup' ? 'signup' :
     searchParams.mode === 'forgot' ? 'forgot' :
     'password';
+
+  // ?autofill=1 prefills the email field. Bookmark /login?autofill=1 for one-click sign-in
+  // (email is filled, browser password manager fills the password).
+  const autofill = searchParams.autofill === '1';
+  const prefillEmail = autofill ? AUTOFILL_EMAIL : '';
+
+  // When autofill is on, propagate it to the mode-switcher links so the
+  // prefill survives switching tabs.
+  const linkSuffix = autofill ? '&autofill=1' : '';
 
   return (
     <main className="min-h-screen flex items-center justify-center px-6">
@@ -18,24 +33,31 @@ export default function LoginPage({ searchParams }: { searchParams: { sent?: str
 
         <div className="flex gap-1 mb-5 p-1 bg-slate-100 rounded-lg text-sm">
           <a
-            href="/login?mode=password"
+            href={`/login?mode=password${linkSuffix}`}
             className={`flex-1 text-center py-1.5 rounded-md transition ${mode === 'password' || mode === 'forgot' ? 'bg-white shadow-sm font-medium' : 'text-muted'}`}
           >
             Sign in
           </a>
           <a
-            href="/login?mode=magic"
+            href={`/login?mode=magic${linkSuffix}`}
             className={`flex-1 text-center py-1.5 rounded-md transition ${mode === 'magic' ? 'bg-white shadow-sm font-medium' : 'text-muted'}`}
           >
             Magic link
           </a>
           <a
-            href="/login?mode=signup"
+            href={`/login?mode=signup${linkSuffix}`}
             className={`flex-1 text-center py-1.5 rounded-md transition ${mode === 'signup' ? 'bg-white shadow-sm font-medium' : 'text-muted'}`}
           >
             Create account
           </a>
         </div>
+
+        {autofill && (
+          <p className="mb-3 text-xs text-muted">
+            Email prefilled: <strong>{AUTOFILL_EMAIL}</strong>. Your browser&apos;s password manager
+            should fill the password — just click Sign in.
+          </p>
+        )}
 
         {mode === 'password' && (
           <form action={signInWithPassword} className="space-y-3">
@@ -46,6 +68,7 @@ export default function LoginPage({ searchParams }: { searchParams: { sent?: str
                 type="email"
                 required
                 autoComplete="email"
+                defaultValue={prefillEmail}
                 className="mt-1 w-full border border-line rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ink"
                 placeholder="you@example.com"
               />
@@ -58,6 +81,7 @@ export default function LoginPage({ searchParams }: { searchParams: { sent?: str
                 required
                 autoComplete="current-password"
                 minLength={6}
+                autoFocus={autofill}
                 className="mt-1 w-full border border-line rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ink"
               />
             </label>
@@ -65,7 +89,7 @@ export default function LoginPage({ searchParams }: { searchParams: { sent?: str
               Sign in
             </SubmitButton>
             <div className="text-xs text-muted text-center">
-              <a href="/login?mode=forgot" className="hover:text-ink">Forgot your password?</a>
+              <a href={`/login?mode=forgot${linkSuffix}`} className="hover:text-ink">Forgot your password?</a>
             </div>
           </form>
         )}
@@ -80,6 +104,7 @@ export default function LoginPage({ searchParams }: { searchParams: { sent?: str
                 type="email"
                 required
                 autoComplete="email"
+                defaultValue={prefillEmail}
                 className="mt-1 w-full border border-line rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ink"
                 placeholder="you@example.com"
               />
@@ -135,6 +160,7 @@ export default function LoginPage({ searchParams }: { searchParams: { sent?: str
                 type="email"
                 required
                 autoComplete="email"
+                defaultValue={prefillEmail}
                 className="mt-1 w-full border border-line rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-ink"
                 placeholder="you@example.com"
               />
@@ -143,7 +169,7 @@ export default function LoginPage({ searchParams }: { searchParams: { sent?: str
               Send reset link
             </SubmitButton>
             <div className="text-xs text-muted text-center">
-              <a href="/login?mode=password" className="hover:text-ink">← Back to sign in</a>
+              <a href={`/login?mode=password${linkSuffix}`} className="hover:text-ink">← Back to sign in</a>
             </div>
           </form>
         )}
