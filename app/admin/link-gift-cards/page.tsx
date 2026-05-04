@@ -16,6 +16,7 @@ interface Result {
   customers_in_db: number;
   customers_already_linked: number;
   customers_linked: number;
+  customers_failed: number;
   customers_in_csv_not_in_db: number;
   customers_with_no_eligible_card: number;
   duration_ms: number;
@@ -121,6 +122,7 @@ export default function LinkGiftCardsPage() {
               <Row label="Customers in our DB" value={result.customers_in_db.toLocaleString()} />
               <Row label="Already fully linked" value={result.customers_already_linked.toLocaleString()} />
               <Row label="Linked this run" value={result.customers_linked.toLocaleString()} />
+              <Row label="Failed (DB write error)" value={result.customers_failed.toLocaleString()} />
               <Row label="In CSV but not in our DB" value={result.customers_in_csv_not_in_db.toLocaleString()} />
               <Row label="No eligible card (all disabled)" value={result.customers_with_no_eligible_card.toLocaleString()} />
             </dl>
