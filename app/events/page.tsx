@@ -79,20 +79,18 @@ export default async function EventsPage({ searchParams }: { searchParams: Searc
                 <th className="py-2 px-4 font-medium"><Sort label="Grants" col="total_grants_count" sortKey={sortKey} dir={dir} q={q} /></th>
                 <th className="py-2 px-4 font-medium"><Sort label="Total $" col="total_grants_amount" sortKey={sortKey} dir={dir} q={q} /></th>
                 <th className="py-2 px-4 font-medium"><Sort label="Uploaded" col="created_at" sortKey={sortKey} dir={dir} q={q} /></th>
-                <th className="py-2 px-4 font-medium"></th>
               </tr>
             </thead>
             <tbody>
               {events.map((e) => (
                 <tr key={e.id} className="border-b border-line last:border-0 hover:bg-slate-50">
-                  <td className="py-2 px-4 font-medium">{e.name}</td>
+                  <td className="py-2 px-4 font-medium">
+                    <Link href={`/events/${e.id}`} className="text-ink hover:underline">{e.name}</Link>
+                  </td>
                   <td className="py-2 px-4 text-muted">{e.host ?? '—'}</td>
                   <td className="py-2 px-4">{e.total_grants_count ?? 0}</td>
                   <td className="py-2 px-4 font-semibold">{fmtMoney(e.total_grants_amount)}</td>
                   <td className="py-2 px-4 text-xs text-muted">{fmtDateTime(e.created_at)}</td>
-                  <td className="py-2 px-4 text-right">
-                    <Link href={`/events/${e.id}`} className="text-ink underline">Open →</Link>
-                  </td>
                 </tr>
               ))}
             </tbody>

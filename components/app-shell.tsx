@@ -29,6 +29,16 @@ const NAV: NavItem[] = [
   { href: '/events', label: 'Events' },
   { href: '/reports/expirations', label: 'Expirations' },
   {
+    href: '/tools',
+    label: 'Tools',
+    children: [
+      { href: '/admin/import-master', label: 'Import Master Rise file' },
+      { href: '/admin/link-gift-cards', label: 'Link gift cards' },
+      { href: '/admin/reconcile-shopify', label: 'Reconcile from Shopify' },
+      { href: '/test-connections', label: 'Test connections' },
+    ],
+  },
+  {
     href: '/settings',
     label: 'Settings',
     children: [
@@ -36,10 +46,6 @@ const NAV: NavItem[] = [
       { href: '/settings/users', label: 'Users' },
       { href: '/settings/connections/shopify', label: 'Shopify' },
       { href: '/settings/connections/klaviyo', label: 'Klaviyo' },
-      { href: '/test-connections', label: 'Test connections' },
-      { href: '/admin/import-master', label: 'Import Master Rise file' },
-      { href: '/admin/link-gift-cards', label: 'Link gift cards' },
-      { href: '/admin/reconcile-shopify', label: 'Reconcile from Shopify' },
     ],
   },
 ];
@@ -82,10 +88,19 @@ export function AppShell({ userEmail, children }: AppShellProps) {
 }
 
 function Sidebar({ pathname, userEmail }: { pathname: string; userEmail: string | null }) {
-  // Settings is the only expandable section. Auto-expand if we're inside it.
-  const settingsItem = NAV.find((n) => n.label === 'Settings')!;
-  const settingsActive = isSectionActive(pathname, settingsItem);
-  const [settingsOpen, setSettingsOpen] = useState<boolean>(settingsActive);
+  // Each expandable section tracks its own open state. Auto-open whichever
+  // section we're currently navigating inside of.
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    NAV.forEach((item) => {
+      if (item.children) initial[item.href] = isSectionActive(pathname, item);
+    });
+    return initial;
+  });
+
+  function toggleSection(href: string) {
+    setOpenSections((prev) => ({ ...prev, [href]: !prev[href] }));
+  }
 
   return (
     <aside className="fixed inset-y-0 left-0 w-60 bg-white border-r border-line flex flex-col">
@@ -117,6 +132,7 @@ function Sidebar({ pathname, userEmail }: { pathname: string; userEmail: string 
             );
           }
 
+          const isOpen = openSections[item.href] ?? false;
           return (
             <div key={item.href}>
               <div className="flex items-stretch">
@@ -133,20 +149,20 @@ function Sidebar({ pathname, userEmail }: { pathname: string; userEmail: string 
                   {item.label}
                 </Link>
                 <button
-                  onClick={() => setSettingsOpen((o) => !o)}
-                  aria-label={settingsOpen ? 'Collapse Settings' : 'Expand Settings'}
+                  onClick={() => toggleSection(item.href)}
+                  aria-label={isOpen ? `Collapse ${item.label}` : `Expand ${item.label}`}
                   className="px-3 text-muted hover:text-ink hover:bg-slate-50 transition"
                   type="button"
                 >
                   <span
                     className="inline-block transition-transform"
-                    style={{ transform: settingsOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
+                    style={{ transform: isOpen ? 'rotate(90deg)' : 'rotate(0deg)' }}
                   >
                     ›
                   </span>
                 </button>
               </div>
-              {settingsOpen && (
+              {isOpen && (
                 <div className="bg-slate-50/50 border-y border-line/50">
                   {item.children.map((c) => {
                     const childActive = isActive(pathname, c.href);

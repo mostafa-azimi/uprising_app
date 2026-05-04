@@ -13,12 +13,18 @@ import { z } from 'zod';
 import { createSupabaseServiceClient } from './supabase/server';
 import { giftCardCreate, giftCardCredit, findGiftCardsByLast4 } from './shopify';
 import { upsertProfile } from './klaviyo';
-import { findOrCreateCustomerByEmail, NotInKlaviyoError, recomputeBalance, type LocalCustomer } from './customers';
+import {
+  findOrCreateCustomerByEmail,
+  findOrCreateCustomerByEmailDbOnly,
+  NotInKlaviyoError,
+  recomputeBalance,
+  type LocalCustomer,
+} from './customers';
 
 // ----- CSV row schema -----
 export const RiseRowSchema = z.object({
   code: z.string().optional().default(''),
-  adjust_amount: z.coerce.number().positive('amount must be > 0'),
+  adjust_amount: z.coerce.number().nonnegative('amount must be >= 0'),
   expires_on: z.string().regex(/^\d{1,2}\/\d{1,2}\/\d{4}$|^\d{4}-\d{2}-\d{2}$/, 'expires_on must be MM/DD/YYYY or YYYY-MM-DD'),
   customer_name: z.string().optional().default(''),
   customer_email: z.string().email('invalid email'),
@@ -202,37 +208,57 @@ export async function processRiseRow(args: {
   uploadedBy?: string;
   uploadedByEmail?: string | null;
   runId?: string;
+  skipShopify?: boolean;
+  skipKlaviyo?: boolean;
 }): Promise<RowResult> {
-  const { rowIndex, row, eventId, runId } = args;
+  const { rowIndex, row, eventId, runId, skipShopify = false, skipKlaviyo = false } = args;
   const email = row.customer_email.trim().toLowerCase();
   const supabase = createSupabaseServiceClient();
   const { first: csvFirst, last: csvLast } = splitName(row.customer_name);
   const tStart = Date.now();
 
-  // --- 1. Find or create local customer (Klaviyo gate) ---
-  rowLog(runId, 'info', 'row_started', { row_index: rowIndex, email, amount: row.adjust_amount });
-  let lookup: { customer: LocalCustomer; klaviyo: { id: string; properties: Record<string, unknown> } };
-  try {
-    lookup = await findOrCreateCustomerByEmail(email, csvFirst, csvLast);
-    rowLog(runId, 'info', 'row_klaviyo_found', {
-      row_index: rowIndex, email,
-      klaviyo_profile_id: lookup.klaviyo.id,
-      had_loyalty_code: !!lookup.klaviyo.properties.loyalty_card_code,
-    });
-  } catch (e) {
-    if (e instanceof NotInKlaviyoError) {
-      rowLog(runId, 'warn', 'row_not_in_klaviyo', { row_index: rowIndex, email });
-      return { ok: false, rowIndex, email, error: e.message, reason: 'not_in_klaviyo' };
-    }
-    rowLog(runId, 'error', 'row_klaviyo_lookup_failed', { row_index: rowIndex, email, error: (e as Error).message });
-    return { ok: false, rowIndex, email, error: (e as Error).message, reason: 'db_failed' };
-  }
-  let customer = lookup.customer;
+  // --- 1. Find or create local customer ---
+  rowLog(runId, 'info', 'row_started', {
+    row_index: rowIndex, email, amount: row.adjust_amount, skip_shopify: skipShopify, skip_klaviyo: skipKlaviyo,
+  });
 
-  // --- 2. If our DB has no loyalty_card_code yet but Klaviyo does, hydrate from Klaviyo ---
-  if (!customer.loyalty_card_code) {
-    const fromKlaviyo = typeof lookup.klaviyo.properties.loyalty_card_code === 'string'
-      ? (lookup.klaviyo.properties.loyalty_card_code as string).trim()
+  let customer: LocalCustomer;
+  let klaviyoProps: Record<string, unknown> | null = null;
+
+  if (skipKlaviyo) {
+    // DB-only path: no Klaviyo read, no NotInKlaviyo gate
+    try {
+      customer = await findOrCreateCustomerByEmailDbOnly(email, csvFirst, csvLast);
+      rowLog(runId, 'info', 'row_db_lookup_ok', { row_index: rowIndex, email, customer_id: customer.id });
+    } catch (e) {
+      rowLog(runId, 'error', 'row_db_lookup_failed', { row_index: rowIndex, email, error: (e as Error).message });
+      return { ok: false, rowIndex, email, error: (e as Error).message, reason: 'db_failed' };
+    }
+  } else {
+    let lookup: { customer: LocalCustomer; klaviyo: { id: string; properties: Record<string, unknown> } };
+    try {
+      lookup = await findOrCreateCustomerByEmail(email, csvFirst, csvLast);
+      rowLog(runId, 'info', 'row_klaviyo_found', {
+        row_index: rowIndex, email,
+        klaviyo_profile_id: lookup.klaviyo.id,
+        had_loyalty_code: !!lookup.klaviyo.properties.loyalty_card_code,
+      });
+    } catch (e) {
+      if (e instanceof NotInKlaviyoError) {
+        rowLog(runId, 'warn', 'row_not_in_klaviyo', { row_index: rowIndex, email });
+        return { ok: false, rowIndex, email, error: e.message, reason: 'not_in_klaviyo' };
+      }
+      rowLog(runId, 'error', 'row_klaviyo_lookup_failed', { row_index: rowIndex, email, error: (e as Error).message });
+      return { ok: false, rowIndex, email, error: (e as Error).message, reason: 'db_failed' };
+    }
+    customer = lookup.customer;
+    klaviyoProps = lookup.klaviyo.properties;
+  }
+
+  // --- 2. Hydrate loyalty_card_code from Klaviyo if missing (only when we read Klaviyo) ---
+  if (!skipKlaviyo && klaviyoProps && !customer.loyalty_card_code) {
+    const fromKlaviyo = typeof klaviyoProps.loyalty_card_code === 'string'
+      ? (klaviyoProps.loyalty_card_code as string).trim()
       : '';
     if (fromKlaviyo) {
       const { error } = await supabase
@@ -249,64 +275,71 @@ export async function processRiseRow(args: {
   const expiresOn = normalizeDate(row.expires_on);
   const amount = Number(row.adjust_amount);
 
-  // --- 3. Apply to Shopify (orphan gift card) ---
-  rowLog(runId, 'info', 'row_shopify_attempt', {
-    row_index: rowIndex, email, amount, expires_on: expiresOn,
-    has_existing_card: !!customer.shopify_gift_card_id,
-    has_loyalty_code: !!customer.loyalty_card_code,
-  });
-  let giftCard: GiftCardOutcome;
-  const tShopify = Date.now();
-  try {
-    giftCard = await applyGrantToGiftCard({
-      customer,
-      amount,
-      noteForShopify: `Uprising grant — event:${eventId} — ${row.note || row.reason || ''} — exp:${expiresOn}`,
-      expiresOn,
-    });
-    rowLog(runId, 'info', 'row_shopify_ok', {
-      row_index: rowIndex, email,
-      gift_card_id: giftCard.id, last4: giftCard.last4, ms: Date.now() - tShopify,
-    });
-    // Persistent audit (success) so we can see what happened later
-    await supabase.from('sync_log').insert({
-      target: 'shopify',
-      operation: 'giftCard_credit_or_create',
-      entity_id: customer.id,
-      ok: true,
-      status_code: 200,
-      request_body: { email, amount, expires_on: expiresOn, run_id: runId },
-      response_body: { gift_card_id: giftCard.id, last4: giftCard.last4 },
-    });
-    customer = {
-      ...customer,
-      shopify_gift_card_id: giftCard.id,
-      shopify_gift_card_last4: giftCard.last4,
-      loyalty_card_code: giftCard.code,
-    };
-  } catch (e) {
-    const errMsg = (e as Error).message;
-    rowLog(runId, 'error', 'row_shopify_failed', {
+  // --- 3. Apply to Shopify (orphan gift card) — unless skipShopify ---
+  let giftCard: GiftCardOutcome | null = null;
+  if (skipShopify) {
+    rowLog(runId, 'info', 'row_shopify_skipped', { row_index: rowIndex, email });
+  } else if (amount === 0) {
+    // Zero-amount grants don't need Shopify (no money to credit)
+    rowLog(runId, 'info', 'row_shopify_skipped_zero', { row_index: rowIndex, email });
+  } else {
+    rowLog(runId, 'info', 'row_shopify_attempt', {
       row_index: rowIndex, email, amount, expires_on: expiresOn,
-      error: errMsg, ms: Date.now() - tShopify,
+      has_existing_card: !!customer.shopify_gift_card_id,
+      has_loyalty_code: !!customer.loyalty_card_code,
     });
-    await supabase.from('sync_log').insert({
-      target: 'shopify',
-      operation: 'giftCard_credit_or_create',
-      entity_id: customer.id,
-      ok: false,
-      error_message: errMsg,
-      request_body: {
-        email,
+    const tShopify = Date.now();
+    try {
+      giftCard = await applyGrantToGiftCard({
+        customer,
         amount,
+        noteForShopify: `Uprising grant — event:${eventId} — ${row.note || row.reason || ''} — exp:${expiresOn}`,
         expiresOn,
-        run_id: runId,
-        existing_gift_card_id: customer.shopify_gift_card_id,
-        existing_loyalty_card_code: customer.loyalty_card_code,
-      },
-      response_body: { stack: ((e as Error).stack ?? '').slice(0, 2000) },
-    });
-    return { ok: false, rowIndex, email, error: `Shopify: ${errMsg}`, reason: 'shopify_failed' };
+      });
+      rowLog(runId, 'info', 'row_shopify_ok', {
+        row_index: rowIndex, email,
+        gift_card_id: giftCard.id, last4: giftCard.last4, ms: Date.now() - tShopify,
+      });
+      // Persistent audit (success) so we can see what happened later
+      await supabase.from('sync_log').insert({
+        target: 'shopify',
+        operation: 'giftCard_credit_or_create',
+        entity_id: customer.id,
+        ok: true,
+        status_code: 200,
+        request_body: { email, amount, expires_on: expiresOn, run_id: runId },
+        response_body: { gift_card_id: giftCard.id, last4: giftCard.last4 },
+      });
+      customer = {
+        ...customer,
+        shopify_gift_card_id: giftCard.id,
+        shopify_gift_card_last4: giftCard.last4,
+        loyalty_card_code: giftCard.code,
+      };
+    } catch (e) {
+      const errMsg = (e as Error).message;
+      rowLog(runId, 'error', 'row_shopify_failed', {
+        row_index: rowIndex, email, amount, expires_on: expiresOn,
+        error: errMsg, ms: Date.now() - tShopify,
+      });
+      await supabase.from('sync_log').insert({
+        target: 'shopify',
+        operation: 'giftCard_credit_or_create',
+        entity_id: customer.id,
+        ok: false,
+        error_message: errMsg,
+        request_body: {
+          email,
+          amount,
+          expiresOn,
+          run_id: runId,
+          existing_gift_card_id: customer.shopify_gift_card_id,
+          existing_loyalty_card_code: customer.loyalty_card_code,
+        },
+        response_body: { stack: ((e as Error).stack ?? '').slice(0, 2000) },
+      });
+      return { ok: false, rowIndex, email, error: `Shopify: ${errMsg}`, reason: 'shopify_failed' };
+    }
   }
 
   // --- 4. Insert grant + ledger ---
@@ -334,7 +367,7 @@ export async function processRiseRow(args: {
       grant_id: grantId,
       type: 'issue',
       amount,
-      shopify_transaction_id: giftCard.creditTxnId,
+      shopify_transaction_id: giftCard?.creditTxnId ?? null,
       description: row.note || row.reason || 'Issue',
       created_by: args.uploadedBy ?? null,
       created_by_email: args.uploadedByEmail ?? null,
@@ -368,39 +401,44 @@ export async function processRiseRow(args: {
     .update({ expiration_date: expiresOn })
     .eq('id', customer.id);
 
-  // --- 6. Push 4 Rise-compatible Klaviyo properties ---
-  const tKlaviyo = Date.now();
-  try {
-    await upsertProfile({
-      email: customer.email,
-      first_name: customer.first_name ?? undefined,
-      last_name: customer.last_name ?? undefined,
-      properties: {
-        loyalty_card_code: giftCard.code,
+  // --- 6. Push 4 Rise-compatible Klaviyo properties — unless skipKlaviyo ---
+  if (skipKlaviyo) {
+    rowLog(runId, 'info', 'row_klaviyo_skipped', { row_index: rowIndex, email });
+  } else {
+    const tKlaviyo = Date.now();
+    const codeForKlaviyo = giftCard?.code ?? customer.loyalty_card_code ?? null;
+    try {
+      await upsertProfile({
+        email: customer.email,
+        first_name: customer.first_name ?? undefined,
+        last_name: customer.last_name ?? undefined,
+        properties: {
+          ...(codeForKlaviyo ? { loyalty_card_code: codeForKlaviyo } : {}),
+          loyalty_card_balance: newBalance,
+          last_reward: amount,
+          expiration_date: expiresOn,
+        },
+      });
+      rowLog(runId, 'info', 'row_klaviyo_pushed', {
+        row_index: rowIndex, email,
         loyalty_card_balance: newBalance,
-        last_reward: amount,
-        expiration_date: expiresOn,
-      },
-    });
-    rowLog(runId, 'info', 'row_klaviyo_pushed', {
-      row_index: rowIndex, email,
-      loyalty_card_balance: newBalance,
-      loyalty_card_code: giftCard.code,
-      ms: Date.now() - tKlaviyo,
-    });
-  } catch (e) {
-    rowLog(runId, 'error', 'row_klaviyo_push_failed', {
-      row_index: rowIndex, email,
-      error: (e as Error).message,
-      ms: Date.now() - tKlaviyo,
-    });
-    await supabase.from('sync_log').insert({
-      target: 'klaviyo',
-      operation: 'profile_property_sync',
-      entity_id: customer.id,
-      ok: false,
-      error_message: (e as Error).message,
-    });
+        loyalty_card_code: codeForKlaviyo,
+        ms: Date.now() - tKlaviyo,
+      });
+    } catch (e) {
+      rowLog(runId, 'error', 'row_klaviyo_push_failed', {
+        row_index: rowIndex, email,
+        error: (e as Error).message,
+        ms: Date.now() - tKlaviyo,
+      });
+      await supabase.from('sync_log').insert({
+        target: 'klaviyo',
+        operation: 'profile_property_sync',
+        entity_id: customer.id,
+        ok: false,
+        error_message: (e as Error).message,
+      });
+    }
   }
 
   // --- Bump event aggregates ---

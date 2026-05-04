@@ -7,6 +7,8 @@ import { processGrantsUpload, type UploadOutcome } from './actions';
 export default function UploadGrantsPage() {
   const [file, setFile] = useState<File | null>(null);
   const [eventName, setEventName] = useState('');
+  const [skipShopify, setSkipShopify] = useState(false);
+  const [skipKlaviyo, setSkipKlaviyo] = useState(false);
   const [outcome, setOutcome] = useState<UploadOutcome | null>(null);
   const [isPending, startTransition] = useTransition();
   const [topError, setTopError] = useState<string | null>(null);
@@ -28,6 +30,8 @@ export default function UploadGrantsPage() {
     const fd = new FormData();
     fd.append('csv', file);
     fd.append('eventName', eventName.trim());
+    if (skipShopify) fd.append('skipShopify', '1');
+    if (skipKlaviyo) fd.append('skipKlaviyo', '1');
     startTransition(async () => {
       try {
         const res = await processGrantsUpload(fd);
@@ -45,7 +49,7 @@ export default function UploadGrantsPage() {
       <p className="text-sm text-muted mb-8">
         Each upload is a single event you'll be able to look up later (e.g. <code>2026-04-28 — NADGT CO Premier</code>).
         CSV columns: <code>code, adjust_amount, expires_on, customer_name, customer_email, reason, note</code>.
-        Customers must already exist in Klaviyo.
+        By default customers must already exist in Klaviyo — toggle <strong>Skip Klaviyo</strong> below to import without that requirement.
       </p>
 
       <div className="border border-line rounded-xl bg-white p-6 mb-6 space-y-5">
@@ -81,6 +85,48 @@ export default function UploadGrantsPage() {
           </div>
         )}
 
+        <fieldset className="border border-line rounded-lg p-4 space-y-2">
+          <legend className="text-xs font-medium text-muted px-1">Advanced options</legend>
+          <label className="flex items-start gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={skipShopify}
+              onChange={(e) => setSkipShopify(e.target.checked)}
+              className="mt-1"
+            />
+            <span>
+              <span className="font-medium">Skip Shopify</span>
+              <span className="block text-xs text-muted">
+                Don&apos;t create or credit Shopify gift cards. Grant lives only in our DB.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={skipKlaviyo}
+              onChange={(e) => setSkipKlaviyo(e.target.checked)}
+              className="mt-1"
+            />
+            <span>
+              <span className="font-medium">Skip Klaviyo</span>
+              <span className="block text-xs text-muted">
+                Don&apos;t look up Klaviyo for the gate, and don&apos;t push profile properties.
+                Customers not in Klaviyo will still be imported.
+              </span>
+            </span>
+          </label>
+          {(skipShopify || skipKlaviyo) && (
+            <p className="text-xs text-amber-800 bg-yellow-50 border border-yellow-200 rounded-md px-3 py-2 mt-2">
+              <strong>DB-only mode:</strong> these grants will exist in Uprising but
+              {skipShopify && ' Shopify gift card balances will not change'}
+              {skipShopify && skipKlaviyo && ' and'}
+              {skipKlaviyo && ' Klaviyo profiles will not be updated'}.
+              Use this for backfills/historical records only.
+            </p>
+          )}
+        </fieldset>
+
         <button
           onClick={submit}
           disabled={!file || !eventName.trim() || isPending}
@@ -91,7 +137,13 @@ export default function UploadGrantsPage() {
 
         {isPending && (
           <p className="text-sm text-muted">
-            Each row hits Klaviyo, Shopify, and the database — please don't close this tab.
+            {skipShopify && skipKlaviyo
+              ? 'Each row writes to the database only — no external APIs.'
+              : skipShopify
+                ? 'Each row hits Klaviyo and the database. Shopify is skipped.'
+                : skipKlaviyo
+                  ? 'Each row hits Shopify and the database. Klaviyo is skipped.'
+                  : "Each row hits Klaviyo, Shopify, and the database — please don't close this tab."}
           </p>
         )}
       </div>

@@ -85,6 +85,54 @@ export async function findOrCreateCustomerByEmail(
   return { customer: created as LocalCustomer, klaviyo };
 }
 
+/**
+ * DB-only lookup: skips Klaviyo entirely. Used by the "skip Klaviyo"
+ * upload mode for backfills/historical imports where we don't want to
+ * touch Klaviyo at all (no read, no write).
+ *
+ * If the customer doesn't exist locally, creates a row with just the
+ * email + (optional) name from the CSV. klaviyo_profile_id stays null.
+ */
+export async function findOrCreateCustomerByEmailDbOnly(
+  email: string,
+  csvFirstName?: string,
+  csvLastName?: string
+): Promise<LocalCustomer> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const supabase = createSupabaseServiceClient();
+
+  const { data: existing, error: selErr } = await supabase
+    .from('customers')
+    .select('*')
+    .eq('email', normalizedEmail)
+    .maybeSingle();
+  if (selErr) throw new Error(`DB lookup failed for ${normalizedEmail}: ${selErr.message}`);
+  if (existing) return existing as LocalCustomer;
+
+  const { data: created, error: insErr } = await supabase
+    .from('customers')
+    .insert({
+      email: normalizedEmail,
+      first_name: csvFirstName ?? null,
+      last_name: csvLastName ?? null,
+    })
+    .select('*')
+    .single();
+
+  if (insErr) {
+    if (insErr.code === '23505') {
+      const { data: again } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('email', normalizedEmail)
+        .single();
+      if (again) return again as LocalCustomer;
+    }
+    throw new Error(`DB insert failed for ${normalizedEmail}: ${insErr.message}`);
+  }
+  return created as LocalCustomer;
+}
+
 export async function recomputeBalance(customerId: string): Promise<number> {
   const supabase = createSupabaseServiceClient();
   const { data, error } = await supabase

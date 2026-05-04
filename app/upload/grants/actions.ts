@@ -84,6 +84,8 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
 
   const file = formData.get('csv') as File | null;
   const eventName = (formData.get('eventName') as string | null)?.trim() || '';
+  const skipShopify = formData.get('skipShopify') === '1';
+  const skipKlaviyo = formData.get('skipKlaviyo') === '1';
   if (!file) {
     log(runId, 'error', 'no_file');
     return { ok: false, run_id: runId, totalRows: 0, succeeded: 0, failed: 0, totalAmount: 0, durationMs: Date.now() - t0, results: [], campaigns: [], message: 'No file provided' };
@@ -98,6 +100,8 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
     file_name: file.name,
     file_size_kb: Math.round(file.size / 1024),
     event_name: eventName,
+    skip_shopify: skipShopify,
+    skip_klaviyo: skipKlaviyo,
   });
 
   const csvText = await file.text();
@@ -187,6 +191,8 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
       uploadedBy: user.id,
       uploadedByEmail: user.email ?? null,
       runId,
+      skipShopify,
+      skipKlaviyo,
     });
     results.push(result);
     if (result.ok) {

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { expirationClass, fmtDate } from '@/lib/dates';
+import { CopyButton } from '@/components/copy-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,11 +39,11 @@ export default async function EventDetail({ params }: { params: { id: string } }
 
   // Pull customer info for the grants
   const customerIds = Array.from(new Set((grants ?? []).map((g) => g.customer_id)));
-  const customerMap = new Map<string, { email: string; first_name: string | null; last_name: string | null }>();
+  const customerMap = new Map<string, { email: string; first_name: string | null; last_name: string | null; loyalty_card_code: string | null }>();
   if (customerIds.length) {
     const { data: cs } = await supabase
       .from('customers')
-      .select('id, email, first_name, last_name')
+      .select('id, email, first_name, last_name, loyalty_card_code')
       .in('id', customerIds);
     (cs ?? []).forEach((c) => customerMap.set(c.id, c));
   }
@@ -123,6 +124,7 @@ export default async function EventDetail({ params }: { params: { id: string } }
             <thead>
               <tr className="text-left text-muted bg-slate-50 border-b border-line">
                 <th className="py-2 px-4 font-medium">Customer</th>
+                <th className="py-2 px-4 font-medium">Code</th>
                 <th className="py-2 px-4 font-medium">Amount</th>
                 <th className="py-2 px-4 font-medium">Remaining</th>
                 <th className="py-2 px-4 font-medium">Expires</th>
@@ -139,6 +141,16 @@ export default async function EventDetail({ params }: { params: { id: string } }
                         {c?.email ?? '(unknown)'}
                       </Link>
                       {c?.first_name && <div className="text-xs text-muted">{[c.first_name, c.last_name].filter(Boolean).join(' ')}</div>}
+                    </td>
+                    <td className="py-2 px-4">
+                      {c?.loyalty_card_code ? (
+                        <span className="inline-flex items-center">
+                          <code className="text-xs">{c.loyalty_card_code}</code>
+                          <CopyButton value={c.loyalty_card_code} />
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted">—</span>
+                      )}
                     </td>
                     <td className="py-2 px-4 font-semibold">{fmtMoney(g.initial_amount)}</td>
                     <td className="py-2 px-4">{fmtMoney(g.remaining_amount)}</td>

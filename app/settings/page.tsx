@@ -25,11 +25,12 @@ export default async function SettingsPage() {
       <section className="grid sm:grid-cols-2 gap-4 mb-10">
         <Card href="/settings/connections/shopify" title="Shopify" desc="Config display + resync gift card balances from Shopify." />
         <Card href="/settings/connections/klaviyo" title="Klaviyo" desc="Config display + push current customer state to Klaviyo." />
-        <Card href="/test-connections" title="Test connections" desc="Verify Supabase, Shopify, and Klaviyo are reachable." />
-        <Card href="/admin/import-master" title="Import Master Rise file" desc="One-shot CSV importer for the Rise master export. Replaces the old two-file staging tool." />
-        <Card href="/admin/link-gift-cards" title="Link gift cards from Master Rise file" desc="Backfill missing shopify_gift_card_id / loyalty_card_code on existing customers. DB only — no Shopify calls." />
-        <Card href="/admin/reconcile-shopify" title="Reconcile from Shopify" desc="Upload a fresh Shopify gift cards export to bring our DB in sync with Shopify's current balances." />
       </section>
+
+      <p className="text-sm text-muted mb-10">
+        Looking for the import / link / reconcile utilities? They&apos;ve moved to{' '}
+        <Link href="/tools" className="text-ink hover:underline">Tools</Link>.
+      </p>
 
       <h2 className="text-lg font-semibold mb-3">Danger zone</h2>
       <section className="border border-line rounded-xl bg-white p-6 text-sm text-muted">
