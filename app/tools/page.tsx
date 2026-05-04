@@ -33,6 +33,11 @@ export default function ToolsPage() {
           desc="Upload a fresh Shopify gift cards export to bring our DB in sync with Shopify's current balances."
         />
         <Card
+          href="/admin/backfill-redemptions"
+          title="Backfill redemptions"
+          desc="Pull paid Shopify orders in a date range and process gift_card transactions through the same logic as the orders/paid webhook. Updates balances + revenue attribution."
+        />
+        <Card
           href="/test-connections"
           title="Test connections"
           desc="Verify Supabase, Shopify, and Klaviyo are reachable from this deployment."

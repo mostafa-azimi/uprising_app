@@ -35,6 +35,7 @@ const NAV: NavItem[] = [
       { href: '/admin/import-master', label: 'Import Master Rise file' },
       { href: '/admin/link-gift-cards', label: 'Link gift cards' },
       { href: '/admin/reconcile-shopify', label: 'Reconcile from Shopify' },
+      { href: '/admin/backfill-redemptions', label: 'Backfill redemptions' },
       { href: '/test-connections', label: 'Test connections' },
     ],
   },

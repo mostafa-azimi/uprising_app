@@ -371,3 +371,102 @@ export async function findGiftCardsByLast4(last4: string): Promise<GiftCardSearc
 
   return Array.from(seen.values());
 }
+
+// ---------- REST helper (some endpoints expose data better via REST) ----------
+async function shopifyRest<T = unknown>(path: string): Promise<{ data: T; linkHeader: string | null }> {
+  const { shop, token, apiVersion } = cfg();
+  const url = `https://${shop}/admin/api/${apiVersion}/${path.replace(/^\//, '')}`;
+  const res = await fetch(url, {
+    method: 'GET',
+    headers: {
+      'X-Shopify-Access-Token': token,
+      'Accept': 'application/json',
+    },
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Shopify REST ${res.status} ${path}: ${text.slice(0, 800)}`);
+  }
+  const json = (await res.json()) as T;
+  return { data: json, linkHeader: res.headers.get('Link') };
+}
+
+// ---------- Orders / transactions (for redemption backfill) ----------
+export interface ShopifyOrderSummary {
+  id: number;
+  admin_graphql_api_id: string;
+  email: string | null;
+  customer: { id: number; email: string | null } | null;
+  created_at: string;
+  financial_status: string | null;
+  total_price: string;
+  name: string;
+}
+
+export interface ShopifyOrderTransaction {
+  id: number;
+  kind: string;        // 'sale' | 'authorization' | 'capture' | 'refund' | 'void'
+  status: string;      // 'success' | 'pending' | 'failure' | 'error'
+  gateway: string;     // 'gift_card' | 'shopify_payments' | 'shop_pay_installments' | etc
+  amount: string;
+  receipt: { gift_card_id?: number | string } | null;
+  created_at: string;
+}
+
+/**
+ * Page through paid orders since a given date. Returns up to maxPages pages
+ * (250 orders each). Pagination uses the Shopify REST page_info cursor.
+ */
+export async function paginatePaidOrdersSince(args: {
+  sinceISO: string;
+  untilISO?: string;
+  maxPages?: number;
+}): Promise<ShopifyOrderSummary[]> {
+  const { sinceISO, untilISO, maxPages = 50 } = args;
+  const all: ShopifyOrderSummary[] = [];
+
+  // First page (with filters)
+  const params = new URLSearchParams({
+    status: 'any',
+    financial_status: 'paid',
+    created_at_min: sinceISO,
+    limit: '250',
+    fields: 'id,admin_graphql_api_id,email,customer,created_at,financial_status,total_price,name',
+  });
+  if (untilISO) params.set('created_at_max', untilISO);
+
+  let nextPath: string | null = `orders.json?${params.toString()}`;
+  let pages = 0;
+
+  while (nextPath && pages < maxPages) {
+    const { data, linkHeader } = await shopifyRest<{ orders: ShopifyOrderSummary[] }>(nextPath);
+    all.push(...(data.orders ?? []));
+    pages++;
+
+    // Parse Link header for next page cursor
+    nextPath = null;
+    if (linkHeader) {
+      const matches = linkHeader.split(',').map((s) => s.trim());
+      for (const m of matches) {
+        const rel = /rel="([^"]+)"/.exec(m)?.[1];
+        const url = /<([^>]+)>/.exec(m)?.[1];
+        if (rel === 'next' && url) {
+          // url is absolute; we just need the query string after orders.json
+          const u = new URL(url);
+          nextPath = `orders.json${u.search}`;
+          break;
+        }
+      }
+    }
+  }
+
+  return all;
+}
+
+export async function getOrderTransactions(orderId: number | string): Promise<ShopifyOrderTransaction[]> {
+  const { data } = await shopifyRest<{ transactions: ShopifyOrderTransaction[] }>(
+    `orders/${orderId}/transactions.json`
+  );
+  return data.transactions ?? [];
+}
