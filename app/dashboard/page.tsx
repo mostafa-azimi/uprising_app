@@ -1,7 +1,5 @@
 import Link from 'next/link';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import { signOut } from '@/app/login/actions';
-import { SubmitButton } from '@/components/submit-button';
 
 export default async function DashboardPage() {
   const supabase = createSupabaseServerClient();
@@ -18,19 +16,9 @@ export default async function DashboardPage() {
 
   return (
     <main className="min-h-screen px-8 py-10 max-w-5xl mx-auto">
-      <header className="flex items-baseline justify-between mb-10">
-        <div>
-          <h1 className="text-3xl font-bold">Uprising</h1>
-          <p className="text-sm text-muted">Store credit manager · Signed in as {user?.email}</p>
-        </div>
-        <div className="flex items-center gap-4 text-sm">
-          <Link href="/settings" className="text-muted hover:text-ink">Settings</Link>
-          <form action={signOut}>
-            <SubmitButton variant="subtle" className="text-sm" pendingLabel="Signing out…">
-              Sign out
-            </SubmitButton>
-          </form>
-        </div>
+      <header className="mb-10">
+        <h1 className="text-3xl font-bold">Dashboard</h1>
+        <p className="text-sm text-muted">Quick links to the most-used pages.</p>
       </header>
 
       {!isAdmin && (
