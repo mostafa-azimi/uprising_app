@@ -187,26 +187,44 @@ async function applyGrantToGiftCard(args: {
   return { id: card.id, code: card.code, last4, creditTxnId: null };
 }
 
+function rowLog(runId: string | undefined, level: 'info' | 'warn' | 'error', event: string, data: Record<string, unknown>) {
+  if (!runId) return;
+  const payload = { run_id: runId, level, event, ts: new Date().toISOString(), ...data };
+  if (level === 'error') console.error(JSON.stringify(payload));
+  else if (level === 'warn') console.warn(JSON.stringify(payload));
+  else console.log(JSON.stringify(payload));
+}
+
 export async function processRiseRow(args: {
   rowIndex: number;
   row: RiseRow;
   eventId: string;
   uploadedBy?: string;
   uploadedByEmail?: string | null;
+  runId?: string;
 }): Promise<RowResult> {
-  const { rowIndex, row, eventId } = args;
+  const { rowIndex, row, eventId, runId } = args;
   const email = row.customer_email.trim().toLowerCase();
   const supabase = createSupabaseServiceClient();
   const { first: csvFirst, last: csvLast } = splitName(row.customer_name);
+  const tStart = Date.now();
 
   // --- 1. Find or create local customer (Klaviyo gate) ---
+  rowLog(runId, 'info', 'row_started', { row_index: rowIndex, email, amount: row.adjust_amount });
   let lookup: { customer: LocalCustomer; klaviyo: { id: string; properties: Record<string, unknown> } };
   try {
     lookup = await findOrCreateCustomerByEmail(email, csvFirst, csvLast);
+    rowLog(runId, 'info', 'row_klaviyo_found', {
+      row_index: rowIndex, email,
+      klaviyo_profile_id: lookup.klaviyo.id,
+      had_loyalty_code: !!lookup.klaviyo.properties.loyalty_card_code,
+    });
   } catch (e) {
     if (e instanceof NotInKlaviyoError) {
+      rowLog(runId, 'warn', 'row_not_in_klaviyo', { row_index: rowIndex, email });
       return { ok: false, rowIndex, email, error: e.message, reason: 'not_in_klaviyo' };
     }
+    rowLog(runId, 'error', 'row_klaviyo_lookup_failed', { row_index: rowIndex, email, error: (e as Error).message });
     return { ok: false, rowIndex, email, error: (e as Error).message, reason: 'db_failed' };
   }
   let customer = lookup.customer;
@@ -232,13 +250,33 @@ export async function processRiseRow(args: {
   const amount = Number(row.adjust_amount);
 
   // --- 3. Apply to Shopify (orphan gift card) ---
+  rowLog(runId, 'info', 'row_shopify_attempt', {
+    row_index: rowIndex, email, amount, expires_on: expiresOn,
+    has_existing_card: !!customer.shopify_gift_card_id,
+    has_loyalty_code: !!customer.loyalty_card_code,
+  });
   let giftCard: GiftCardOutcome;
+  const tShopify = Date.now();
   try {
     giftCard = await applyGrantToGiftCard({
       customer,
       amount,
       noteForShopify: `Uprising grant — event:${eventId} — ${row.note || row.reason || ''} — exp:${expiresOn}`,
       expiresOn,
+    });
+    rowLog(runId, 'info', 'row_shopify_ok', {
+      row_index: rowIndex, email,
+      gift_card_id: giftCard.id, last4: giftCard.last4, ms: Date.now() - tShopify,
+    });
+    // Persistent audit (success) so we can see what happened later
+    await supabase.from('sync_log').insert({
+      target: 'shopify',
+      operation: 'giftCard_credit_or_create',
+      entity_id: customer.id,
+      ok: true,
+      status_code: 200,
+      request_body: { email, amount, expires_on: expiresOn, run_id: runId },
+      response_body: { gift_card_id: giftCard.id, last4: giftCard.last4 },
     });
     customer = {
       ...customer,
@@ -248,6 +286,10 @@ export async function processRiseRow(args: {
     };
   } catch (e) {
     const errMsg = (e as Error).message;
+    rowLog(runId, 'error', 'row_shopify_failed', {
+      row_index: rowIndex, email, amount, expires_on: expiresOn,
+      error: errMsg, ms: Date.now() - tShopify,
+    });
     await supabase.from('sync_log').insert({
       target: 'shopify',
       operation: 'giftCard_credit_or_create',
@@ -258,6 +300,7 @@ export async function processRiseRow(args: {
         email,
         amount,
         expiresOn,
+        run_id: runId,
         existing_gift_card_id: customer.shopify_gift_card_id,
         existing_loyalty_card_code: customer.loyalty_card_code,
       },
@@ -297,7 +340,9 @@ export async function processRiseRow(args: {
       created_by_email: args.uploadedByEmail ?? null,
     });
     if (lErr) throw new Error(lErr.message);
+    rowLog(runId, 'info', 'row_db_inserted', { row_index: rowIndex, email, grant_id: grantId });
   } catch (e) {
+    rowLog(runId, 'error', 'row_db_insert_failed', { row_index: rowIndex, email, error: (e as Error).message });
     return { ok: false, rowIndex, email, error: `DB: ${(e as Error).message}`, reason: 'db_failed' };
   }
 
@@ -305,7 +350,9 @@ export async function processRiseRow(args: {
   let newBalance = customer.total_balance_cached;
   try {
     newBalance = await recomputeBalance(customer.id);
+    rowLog(runId, 'info', 'row_balance_recomputed', { row_index: rowIndex, email, new_balance: newBalance });
   } catch (e) {
+    rowLog(runId, 'error', 'row_recompute_failed', { row_index: rowIndex, email, error: (e as Error).message });
     await supabase.from('sync_log').insert({
       target: 'shopify',
       operation: 'recompute_balance',
@@ -322,6 +369,7 @@ export async function processRiseRow(args: {
     .eq('id', customer.id);
 
   // --- 6. Push 4 Rise-compatible Klaviyo properties ---
+  const tKlaviyo = Date.now();
   try {
     await upsertProfile({
       email: customer.email,
@@ -334,7 +382,18 @@ export async function processRiseRow(args: {
         expiration_date: expiresOn,
       },
     });
+    rowLog(runId, 'info', 'row_klaviyo_pushed', {
+      row_index: rowIndex, email,
+      loyalty_card_balance: newBalance,
+      loyalty_card_code: giftCard.code,
+      ms: Date.now() - tKlaviyo,
+    });
   } catch (e) {
+    rowLog(runId, 'error', 'row_klaviyo_push_failed', {
+      row_index: rowIndex, email,
+      error: (e as Error).message,
+      ms: Date.now() - tKlaviyo,
+    });
     await supabase.from('sync_log').insert({
       target: 'klaviyo',
       operation: 'profile_property_sync',
@@ -363,6 +422,11 @@ export async function processRiseRow(args: {
   } catch {
     /* non-fatal */
   }
+
+  rowLog(runId, 'info', 'row_success', {
+    row_index: rowIndex, email, grant_id: grantId, amount, expires_on: expiresOn,
+    total_ms: Date.now() - tStart,
+  });
 
   return {
     ok: true,

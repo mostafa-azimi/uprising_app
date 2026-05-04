@@ -40,13 +40,27 @@ async function createNewEvent(args: {
 
 export interface UploadOutcome {
   ok: boolean;
+  run_id: string;
   totalRows: number;
   succeeded: number;
   failed: number;
   totalAmount: number;
+  durationMs: number;
   results: RowResult[];
   campaigns: Array<{ name: string; eventId: string; rowCount: number }>;
   message?: string;
+}
+
+function makeRunId(): string {
+  return `up_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function log(runId: string, level: 'info' | 'warn' | 'error', event: string, data?: Record<string, unknown>) {
+  // Structured single-line JSON so Vercel logs are grep-able by run_id.
+  const payload = { run_id: runId, level, event, ts: new Date().toISOString(), ...data };
+  if (level === 'error') console.error(JSON.stringify(payload));
+  else if (level === 'warn') console.warn(JSON.stringify(payload));
+  else console.log(JSON.stringify(payload));
 }
 
 async function requireAdmin() {
@@ -64,16 +78,27 @@ async function requireAdmin() {
 }
 
 export async function processGrantsUpload(formData: FormData): Promise<UploadOutcome> {
+  const runId = makeRunId();
+  const t0 = Date.now();
   const user = await requireAdmin();
 
   const file = formData.get('csv') as File | null;
   const eventName = (formData.get('eventName') as string | null)?.trim() || '';
   if (!file) {
-    return { ok: false, totalRows: 0, succeeded: 0, failed: 0, totalAmount: 0, results: [], campaigns: [], message: 'No file provided' };
+    log(runId, 'error', 'no_file');
+    return { ok: false, run_id: runId, totalRows: 0, succeeded: 0, failed: 0, totalAmount: 0, durationMs: Date.now() - t0, results: [], campaigns: [], message: 'No file provided' };
   }
   if (!eventName) {
-    return { ok: false, totalRows: 0, succeeded: 0, failed: 0, totalAmount: 0, results: [], campaigns: [], message: 'Event name is required' };
+    log(runId, 'error', 'no_event_name');
+    return { ok: false, run_id: runId, totalRows: 0, succeeded: 0, failed: 0, totalAmount: 0, durationMs: Date.now() - t0, results: [], campaigns: [], message: 'Event name is required' };
   }
+
+  log(runId, 'info', 'upload_started', {
+    user: user.email,
+    file_name: file.name,
+    file_size_kb: Math.round(file.size / 1024),
+    event_name: eventName,
+  });
 
   const csvText = await file.text();
   const parsed = Papa.parse<Record<string, string>>(csvText.trim(), {
@@ -83,13 +108,18 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
   });
 
   if (parsed.errors.length) {
+    log(runId, 'error', 'csv_parse_failed', { errors: parsed.errors.slice(0, 5) });
     return {
       ok: false,
+      run_id: runId,
       totalRows: 0, succeeded: 0, failed: 0, totalAmount: 0,
+      durationMs: Date.now() - t0,
       results: [], campaigns: [],
       message: `CSV parse errors: ${parsed.errors.slice(0, 3).map((e) => e.message).join('; ')}`,
     };
   }
+
+  log(runId, 'info', 'csv_parsed', { row_count: parsed.data.length });
 
   // Validate every row up front, preserving original index
   const validRows: Array<{ row: RiseRow; rowIndex: number }> = [];
@@ -109,13 +139,18 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
     }
   });
 
+  log(runId, 'info', 'rows_validated', { valid: validRows.length, invalid: earlyFailures.length });
+
   if (validRows.length === 0) {
+    log(runId, 'error', 'no_valid_rows');
     return {
       ok: false,
+      run_id: runId,
       totalRows: parsed.data.length,
       succeeded: 0,
       failed: earlyFailures.length,
       totalAmount: 0,
+      durationMs: Date.now() - t0,
       results: earlyFailures,
       campaigns: [],
       message: 'No valid rows in CSV',
@@ -133,6 +168,7 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
     uploadedBy: user.id,
     sourceFilename: file.name,
   });
+  log(runId, 'info', 'event_created', { event_id: eventId, event_name: eventName });
   const campaignRecords: Array<{ name: string; eventId: string; rowCount: number }> = [
     { name: eventName, eventId, rowCount: validRows.length },
   ];
@@ -142,25 +178,57 @@ export async function processGrantsUpload(formData: FormData): Promise<UploadOut
   let succeeded = 0;
   let totalAmount = 0;
 
+  log(runId, 'info', 'processing_started', { rows: validRows.length });
+  let processed = 0;
   for (const { row, rowIndex } of validRows) {
+    const rowT0 = Date.now();
     const result = await processRiseRow({
       rowIndex, row, eventId,
       uploadedBy: user.id,
       uploadedByEmail: user.email ?? null,
+      runId,
     });
     results.push(result);
     if (result.ok) {
       succeeded++;
       totalAmount += result.amount;
+    } else {
+      log(runId, 'warn', 'row_failed', {
+        row_index: rowIndex,
+        email: result.email,
+        reason: result.reason,
+        error: result.error,
+        ms: Date.now() - rowT0,
+      });
+    }
+    processed++;
+    if (processed % 10 === 0 || processed === validRows.length) {
+      log(runId, 'info', 'progress', {
+        processed,
+        total: validRows.length,
+        succeeded,
+        failed: results.length - succeeded,
+      });
     }
   }
 
+  const totalAmountRounded = Math.round(totalAmount * 100) / 100;
+  log(runId, 'info', 'upload_complete', {
+    duration_ms: Date.now() - t0,
+    total_rows: parsed.data.length,
+    succeeded,
+    failed: results.length - succeeded,
+    total_amount: totalAmountRounded,
+  });
+
   return {
     ok: true,
+    run_id: runId,
     totalRows: parsed.data.length,
     succeeded,
     failed: results.length - succeeded,
-    totalAmount: Math.round(totalAmount * 100) / 100,
+    totalAmount: totalAmountRounded,
+    durationMs: Date.now() - t0,
     results,
     campaigns: campaignRecords,
   };
