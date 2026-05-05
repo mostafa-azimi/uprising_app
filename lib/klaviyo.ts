@@ -167,16 +167,40 @@ export async function upsertProfile(args: {
     },
   };
 
-  // Try create first
+  // ---- DIAGNOSTIC: instrument the two Klaviyo calls so we can see in Vercel
+  // logs which one is slow (POST create vs PATCH update) and capture rate
+  // limit headers. No behavior change. Remove after the slowness root cause
+  // is identified.
+  const tStart = Date.now();
+
   const createRes = await fetch(`${BASE}/profiles/`, {
     method: 'POST',
     headers: headers(),
     body: JSON.stringify(body),
     cache: 'no-store',
   });
+  const tCreate = Date.now() - tStart;
+
+  // Pull Klaviyo's rate limit headers if present
+  const rateLimitInfo = {
+    limit_burst: createRes.headers.get('x-ratelimit-limit-burst') ?? null,
+    remaining_burst: createRes.headers.get('x-ratelimit-remaining-burst') ?? null,
+    limit_steady: createRes.headers.get('x-ratelimit-limit-steady') ?? null,
+    remaining_steady: createRes.headers.get('x-ratelimit-remaining-steady') ?? null,
+    retry_after: createRes.headers.get('retry-after') ?? null,
+  };
 
   if (createRes.status === 201 || createRes.status === 200) {
     const json = (await createRes.json()) as { data: { id: string } };
+    console.log(JSON.stringify({
+      klaviyo_timing: 'upsertProfile',
+      path: 'create',
+      status: createRes.status,
+      ms_create: tCreate,
+      ms_total: Date.now() - tStart,
+      email_hash: args.email.length, // length only; don't log PII
+      ratelimit: rateLimitInfo,
+    }));
     return { id: json.data.id };
   }
 
@@ -187,16 +211,44 @@ export async function upsertProfile(args: {
     if (!id) throw new Error('Klaviyo 409 without duplicate_profile_id');
 
     const patchBody = { data: { type: 'profile', id, attributes: body.data.attributes } };
+    const tPatchStart = Date.now();
     const patchRes = await fetch(`${BASE}/profiles/${id}/`, {
       method: 'PATCH',
       headers: headers(),
       body: JSON.stringify(patchBody),
       cache: 'no-store',
     });
+    const tPatch = Date.now() - tPatchStart;
+    const patchRateLimit = {
+      limit_burst: patchRes.headers.get('x-ratelimit-limit-burst') ?? null,
+      remaining_burst: patchRes.headers.get('x-ratelimit-remaining-burst') ?? null,
+      limit_steady: patchRes.headers.get('x-ratelimit-limit-steady') ?? null,
+      remaining_steady: patchRes.headers.get('x-ratelimit-remaining-steady') ?? null,
+      retry_after: patchRes.headers.get('retry-after') ?? null,
+    };
+    console.log(JSON.stringify({
+      klaviyo_timing: 'upsertProfile',
+      path: 'create_then_patch',
+      create_status: createRes.status,
+      patch_status: patchRes.status,
+      ms_create: tCreate,
+      ms_patch: tPatch,
+      ms_total: Date.now() - tStart,
+      email_hash: args.email.length,
+      ratelimit_create: rateLimitInfo,
+      ratelimit_patch: patchRateLimit,
+    }));
     if (!patchRes.ok) throw new Error(`Klaviyo patch ${patchRes.status}: ${(await patchRes.text()).slice(0, 300)}`);
     return { id };
   }
 
+  console.log(JSON.stringify({
+    klaviyo_timing: 'upsertProfile',
+    path: 'create_unexpected_status',
+    status: createRes.status,
+    ms_create: tCreate,
+    ratelimit: rateLimitInfo,
+  }));
   throw new Error(`Klaviyo create profile ${createRes.status}: ${(await createRes.text()).slice(0, 300)}`);
 }
 
