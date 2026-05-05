@@ -36,7 +36,7 @@ interface ApplyOutcome {
   customer_id: string;
   email: string;
   shopify_gift_card_id: string;
-  status: 'applied' | 'in_sync' | 'stale' | 'error';
+  status: 'applied' | 'shopify_fixed' | 'in_sync' | 'stale' | 'error';
   prior_db_total: number;
   new_db_total: number;
   delta_applied: number;
@@ -49,6 +49,7 @@ interface ApplyResult {
   generated_at: string;
   rows_received: number;
   rows_applied: number;
+  rows_shopify_fixed: number;
   rows_in_sync: number;
   rows_stale: number;
   rows_errored: number;
@@ -101,7 +102,8 @@ export default function SyncShopifyBalancesPage() {
   const [bulkExpA, setBulkExpA] = useState<string>('');
 
   // Section B — Shopify > DB (review individually): one-by-one only
-  const [confirmingKeyB, setConfirmingKeyB] = useState<string | null>(null);
+  // The string here is the row key; the second part says which mode is being confirmed
+  const [confirmingB, setConfirmingB] = useState<{ key: string; mode: 'fix_db' | 'fix_shopify' } | null>(null);
   const [sortKeyB, setSortKeyB] = useState<SortKey>('diff');
   // Largest positive first
   const [sortDirB, setSortDirB] = useState<SortDir>('desc');
@@ -120,7 +122,7 @@ export default function SyncShopifyBalancesPage() {
   useEffect(() => {
     if (!preview) {
       setSelectedKeysA(new Set());
-      setConfirmingKeyB(null);
+      setConfirmingB(null);
       setExpOverrides({});
       return;
     }
@@ -195,7 +197,7 @@ export default function SyncShopifyBalancesPage() {
     }
   }
 
-  function payloadFor(rows: DiscrepancyRow[]) {
+  function payloadFor(rows: DiscrepancyRow[], mode: 'fix_db' | 'fix_shopify') {
     return rows.map((r) => {
       const k = rowKey(r);
       const exp = (expOverrides[k] ?? '').trim();
@@ -207,11 +209,12 @@ export default function SyncShopifyBalancesPage() {
         db_total_remaining: r.db_total_remaining,
         diff: r.diff,
         expires_on: exp || null,
+        mode,
       };
     });
   }
 
-  async function runApply(rows: DiscrepancyRow[], busySetter: (b: boolean) => void) {
+  async function runApply(rows: DiscrepancyRow[], mode: 'fix_db' | 'fix_shopify', busySetter: (b: boolean) => void) {
     if (rows.length === 0) {
       setError('Nothing to apply.');
       return;
@@ -222,7 +225,7 @@ export default function SyncShopifyBalancesPage() {
       const res = await fetch('/api/admin/sync-shopify-balances/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ rows: payloadFor(rows) }),
+        body: JSON.stringify({ rows: payloadFor(rows, mode) }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -240,15 +243,15 @@ export default function SyncShopifyBalancesPage() {
   async function runApplyA() {
     setConfirmAOpen(false);
     const toApply = rowsA.filter((r) => selectedKeysA.has(rowKey(r)));
-    await runApply(toApply, setApplyBusyA);
+    await runApply(toApply, 'fix_db', setApplyBusyA);
   }
 
-  async function runApplyOneB(row: DiscrepancyRow) {
+  async function runApplyOneB(row: DiscrepancyRow, mode: 'fix_db' | 'fix_shopify') {
     const k = rowKey(row);
     setConfirmingKeyB(null);
     setApplyBusyBKey(k);
     try {
-      await runApply([row], () => {});
+      await runApply([row], mode, () => {});
     } finally {
       setApplyBusyBKey(null);
     }
@@ -524,10 +527,11 @@ export default function SyncShopifyBalancesPage() {
                       <tbody>
                         {sortedB.map((r) => {
                           const k = rowKey(r);
-                          const isConfirming = confirmingKeyB === k;
+                          const confirmHere = confirmingB?.key === k ? confirmingB.mode : null;
                           const isApplying = applyBusyBKey === k;
                           const exp = expOverrides[k] ?? '';
                           const dateChanged = !!exp && exp !== (r.expires_on_earliest ?? '');
+                          const isBusy = !!applyBusyBKey || applyBusyA;
                           return (
                             <tr key={k} className="border-b border-line last:border-0">
                               <td className="py-1.5 px-3">
@@ -552,20 +556,37 @@ export default function SyncShopifyBalancesPage() {
                                 />
                               </td>
                               <td className="py-1.5 px-3 text-right">
-                                {!isConfirming ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => setConfirmingKeyB(k)}
-                                    disabled={!!applyBusyBKey || applyBusyA}
-                                    className="bg-amber-600 text-white px-3 py-1 rounded text-xs font-medium disabled:opacity-50"
-                                  >
-                                    Apply (+${r.diff.toFixed(2)})
-                                  </button>
-                                ) : (
+                                {confirmHere === null ? (
                                   <div className="flex gap-1 justify-end">
                                     <button
                                       type="button"
-                                      onClick={() => runApplyOneB(r)}
+                                      onClick={() => setConfirmingB({ key: k, mode: 'fix_shopify' })}
+                                      disabled={isBusy}
+                                      className="bg-amber-600 text-white px-2 py-1 rounded text-xs font-medium disabled:opacity-50"
+                                      title={`Debit Shopify by $${r.diff.toFixed(2)} so it matches DB ($${r.db_total_remaining.toFixed(2)})`}
+                                    >
+                                      Fix Shopify (-${r.diff.toFixed(2)})
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmingB({ key: k, mode: 'fix_db' })}
+                                      disabled={isBusy}
+                                      className="bg-emerald-600 text-white px-2 py-1 rounded text-xs font-medium disabled:opacity-50"
+                                      title={`Credit DB by $${r.diff.toFixed(2)} so it matches Shopify ($${r.shopify_balance.toFixed(2)})`}
+                                    >
+                                      Fix DB (+${r.diff.toFixed(2)})
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex gap-1 justify-end items-center">
+                                    <span className="text-[11px] text-muted mr-1">
+                                      {confirmHere === 'fix_shopify'
+                                        ? `Debit Shopify $${r.diff.toFixed(2)}?`
+                                        : `Credit DB $${r.diff.toFixed(2)}?`}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => runApplyOneB(r, confirmHere)}
                                       disabled={isApplying}
                                       className="bg-bad text-white px-2 py-1 rounded text-xs font-medium disabled:opacity-50"
                                     >
@@ -573,7 +594,7 @@ export default function SyncShopifyBalancesPage() {
                                     </button>
                                     <button
                                       type="button"
-                                      onClick={() => setConfirmingKeyB(null)}
+                                      onClick={() => setConfirmingB(null)}
                                       disabled={isApplying}
                                       className="bg-white border border-line px-2 py-1 rounded text-xs font-medium"
                                     >
@@ -617,9 +638,10 @@ export default function SyncShopifyBalancesPage() {
           </h2>
           <dl className="grid grid-cols-2 gap-2 text-sm">
             <Row label="Rows received" value={applyResult.rows_received.toLocaleString()} />
-            <Row label="Applied" value={applyResult.rows_applied.toLocaleString()} bold />
+            <Row label="DB fixed (Section A or 'Fix DB')" value={applyResult.rows_applied.toLocaleString()} bold />
+            <Row label="Shopify fixed ('Fix Shopify')" value={applyResult.rows_shopify_fixed.toLocaleString()} bold />
             <Row label="In sync (no-op)" value={applyResult.rows_in_sync.toLocaleString()} />
-            <Row label="Stale (DB drifted; skipped)" value={applyResult.rows_stale.toLocaleString()} />
+            <Row label="Stale (drifted; skipped)" value={applyResult.rows_stale.toLocaleString()} />
             <Row label="Errored" value={applyResult.rows_errored.toLocaleString()} />
             <Row label="Net delta applied" value={`$${applyResult.total_delta_applied.toFixed(2)}`} />
             <Row label="Customer balances recomputed" value={applyResult.customers_recomputed.toLocaleString()} />

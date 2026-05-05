@@ -3,6 +3,7 @@ import { createSupabaseServiceClient } from '@/lib/supabase/server';
 import { requireAdmin } from '@/lib/auth';
 import { recomputeBalance } from '@/lib/customers';
 import { upsertProfile } from '@/lib/klaviyo';
+import { giftCardDebit, getGiftCard } from '@/lib/shopify';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300;
@@ -27,17 +28,21 @@ interface ApplyRow {
   customer_id: string;
   email: string;
   shopify_gift_card_id: string;
-  shopify_balance: number;             // target value
+  shopify_balance: number;             // target value (used for fix_db mode)
   db_total_remaining: number;          // what preview saw
   diff: number;                        // shopify - db at preview time
   expires_on?: string | null;          // optional override; if set, applies to all active grants on this card
+  // mode (default 'fix_db' for back-compat):
+  //   'fix_db'      — bring DB to match Shopify (existing behavior; debits/credits DB grants)
+  //   'fix_shopify' — bring Shopify to match DB (debits Shopify card; DB unchanged). Only valid when diff > 0.
+  mode?: 'fix_db' | 'fix_shopify';
 }
 
 interface ApplyOutcome {
   customer_id: string;
   email: string;
   shopify_gift_card_id: string;
-  status: 'applied' | 'in_sync' | 'stale' | 'error';
+  status: 'applied' | 'shopify_fixed' | 'in_sync' | 'stale' | 'error';
   prior_db_total: number;
   new_db_total: number;
   delta_applied: number;
@@ -49,7 +54,8 @@ interface ApplyResult {
   ok: boolean;
   generated_at: string;
   rows_received: number;
-  rows_applied: number;
+  rows_applied: number;          // fix_db successes
+  rows_shopify_fixed: number;    // fix_shopify successes
   rows_in_sync: number;
   rows_stale: number;
   rows_errored: number;
@@ -106,6 +112,7 @@ export async function POST(request: NextRequest) {
     generated_at: new Date().toISOString(),
     rows_received: rows.length,
     rows_applied: 0,
+    rows_shopify_fixed: 0,
     rows_in_sync: 0,
     rows_stale: 0,
     rows_errored: 0,
@@ -130,6 +137,103 @@ export async function POST(request: NextRequest) {
         new_db_total: 0,
         delta_applied: 0,
       };
+
+      // ============================================================
+      // BRANCH: fix_shopify mode — debit Shopify down to match DB.
+      // DB is left untouched. Only valid when Shopify > DB.
+      // ============================================================
+      if (row.mode === 'fix_shopify') {
+        try {
+          // Re-fetch live state to compute the actual diff (don't trust preview)
+          const { data: liveGrants, error: gErr } = await supabase
+            .from('grants')
+            .select('remaining_amount')
+            .eq('customer_id', row.customer_id)
+            .eq('status', 'active');
+          if (gErr) throw new Error(`grants query: ${gErr.message}`);
+          const liveDbTotal = (liveGrants ?? []).reduce(
+            (s, g) => s + Number(g.remaining_amount),
+            0
+          );
+          outcome.prior_db_total = Math.round(liveDbTotal * 100) / 100;
+
+          const card = await getGiftCard(row.shopify_gift_card_id);
+          if (!card) throw new Error(`gift card not found in Shopify: ${row.shopify_gift_card_id}`);
+          const liveShopify = Number(card.balance.amount);
+
+          const liveDiff = liveShopify - liveDbTotal;
+          // For fix_shopify, the diff must still be positive (Shopify > DB)
+          if (liveDiff <= 0.005) {
+            outcome.status = 'in_sync';
+            outcome.detail = `Shopify is now $${liveShopify.toFixed(2)}, DB is $${liveDbTotal.toFixed(2)} — no longer needs Shopify fix`;
+            outcome.new_db_total = liveDbTotal;
+            result.rows_in_sync++;
+            result.outcomes.push(outcome);
+            continue;
+          }
+
+          // Stale check: if live diff differs materially from preview's diff, skip
+          if (Math.abs(liveDiff - row.diff) > 0.01) {
+            outcome.status = 'stale';
+            outcome.detail = `live diff $${liveDiff.toFixed(2)} (preview saw $${row.diff.toFixed(2)})`;
+            result.rows_stale++;
+            result.outcomes.push(outcome);
+            continue;
+          }
+
+          // Debit Shopify by liveDiff to bring it down to liveDbTotal
+          await giftCardDebit(
+            row.shopify_gift_card_id,
+            liveDiff.toFixed(2),
+            `Shopify sync reconciliation — debit Shopify to match DB ($${liveDbTotal.toFixed(2)})`
+          );
+
+          // Audit
+          await supabase.from('sync_log').insert({
+            target: 'shopify',
+            operation: 'sync_reconcile_fix_shopify',
+            entity_id: row.customer_id,
+            ok: true,
+            request_body: {
+              email: row.email,
+              gift_card_id: row.shopify_gift_card_id,
+              shopify_before: Math.round(liveShopify * 100) / 100,
+              shopify_after: Math.round(liveDbTotal * 100) / 100,
+              db_total: Math.round(liveDbTotal * 100) / 100,
+              debited: Math.round(liveDiff * 100) / 100,
+              actor: user.email,
+            },
+          });
+
+          outcome.status = 'shopify_fixed';
+          outcome.delta_applied = -Math.round(liveDiff * 100) / 100; // negative since we debited Shopify
+          outcome.new_db_total = liveDbTotal; // DB unchanged
+          outcome.detail = `Debited Shopify by $${liveDiff.toFixed(2)}: $${liveShopify.toFixed(2)} → $${liveDbTotal.toFixed(2)}`;
+          result.rows_shopify_fixed++;
+          result.total_delta_applied += -liveDiff;
+          // Note: don't recompute customer balance — DB didn't change.
+          // Don't push Klaviyo either, customer's app balance is unchanged.
+        } catch (e) {
+          outcome.status = 'error';
+          outcome.detail = (e as Error).message;
+          result.rows_errored++;
+          await supabase.from('sync_log').insert({
+            target: 'shopify',
+            operation: 'sync_reconcile_fix_shopify',
+            entity_id: row.customer_id,
+            ok: false,
+            error_message: outcome.detail,
+            request_body: { email: row.email, gift_card_id: row.shopify_gift_card_id },
+          });
+        }
+        result.outcomes.push(outcome);
+        continue;
+      }
+
+      // ============================================================
+      // BRANCH: fix_db mode (default) — bring DB to match Shopify.
+      // Existing behavior, unchanged. Touches grants + ledger.
+      // ============================================================
 
       try {
         // Validate optional expires_on override (YYYY-MM-DD)
