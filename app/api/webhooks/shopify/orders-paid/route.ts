@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import crypto from 'crypto';
 import { createSupabaseServiceClient } from '@/lib/supabase/server';
 import { applyRedemption } from '@/lib/redemptions';
+import { getOrderTransactions, type ShopifyOrderTransaction } from '@/lib/shopify';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -77,15 +78,49 @@ export async function POST(request: NextRequest) {
   }
 
   const orderId = String(payload.admin_graphql_api_id ?? payload.id ?? '');
+  const orderNumericId = String(payload.id ?? '');
   const email = (payload.customer?.email ?? payload.email ?? '').trim().toLowerCase();
-  const transactions = payload.transactions ?? [];
 
-  // Sum gift_card transactions (kind=sale, status=success)
-  const giftCardTxns = transactions.filter(
-    (t) => (t.gateway ?? '').toLowerCase() === 'gift_card'
-       && (t.status ?? '').toLowerCase() === 'success'
-       && (t.kind ?? '').toLowerCase() === 'sale'
-  );
+  // Shopify's orders/paid webhook payload sometimes omits the transactions
+  // array, or includes it without gift_card detail. Always fetch transactions
+  // separately via REST so we have the full receipt.gift_card_id.
+  // Falls back to payload.transactions only if REST fetch fails.
+  type Txn = ShopifyOrderTransaction | NonNullable<OrderPaidPayload['transactions']>[number];
+  let transactions: Txn[] = [];
+  let txnSource: 'rest' | 'payload' | 'none' = 'none';
+  if (orderNumericId) {
+    try {
+      const restTxns = await getOrderTransactions(orderNumericId);
+      transactions = restTxns;
+      txnSource = 'rest';
+    } catch (e) {
+      // REST failed — fall back to whatever the payload had
+      transactions = payload.transactions ?? [];
+      txnSource = 'payload';
+      await supabase.from('sync_log').insert({
+        target: 'shopify',
+        operation: 'webhook_orders_paid',
+        entity_id: orderId,
+        ok: false,
+        error_message: `transactions REST fetch failed: ${(e as Error).message}`,
+        request_body: { order_id: orderId, fell_back_to: 'payload' },
+      });
+    }
+  } else {
+    transactions = payload.transactions ?? [];
+    txnSource = 'payload';
+  }
+
+  // Sum gift_card transactions (kind=sale or capture, status=success)
+  // Some Shopify versions/setups use 'capture' instead of 'sale' for gift card debits.
+  const giftCardTxns = transactions.filter((t) => {
+    const gateway = String(t.gateway ?? '').toLowerCase();
+    const status = String(t.status ?? '').toLowerCase();
+    const kind = String(t.kind ?? '').toLowerCase();
+    return gateway === 'gift_card'
+      && status === 'success'
+      && (kind === 'sale' || kind === 'capture');
+  });
   const totalGiftCardRedeemed = giftCardTxns.reduce((sum, t) => sum + Number(t.amount ?? 0), 0);
 
   // Log every webhook for audit/debug
@@ -98,27 +133,45 @@ export async function POST(request: NextRequest) {
     request_body: {
       order_id: orderId,
       email,
+      txn_source: txnSource,
+      total_txns: transactions.length,
       gift_card_txns: giftCardTxns.length,
       total_gift_card_redeemed: totalGiftCardRedeemed,
-      gift_card_ids: giftCardTxns.map((t) => t.receipt?.gift_card_id ?? null),
+      gift_card_ids: giftCardTxns.map((t) => {
+        const receipt = (t as { receipt?: { gift_card_id?: number | string } | null }).receipt;
+        return receipt?.gift_card_id ?? null;
+      }),
+      gateways_seen: Array.from(new Set(transactions.map((t) => t.gateway ?? '(none)'))),
+      kinds_seen: Array.from(new Set(transactions.map((t) => t.kind ?? '(none)'))),
     },
   });
 
-  // Total order value from ALL successful sale transactions (gift card + cash + credit + ShopPay etc.)
-  const allSales = transactions.filter(
-    (t) => (t.kind ?? '').toLowerCase() === 'sale' && (t.status ?? '').toLowerCase() === 'success'
-  );
+  // Total order value from ALL successful sale/capture transactions
+  const allSales = transactions.filter((t) => {
+    const kind = String(t.kind ?? '').toLowerCase();
+    const status = String(t.status ?? '').toLowerCase();
+    return (kind === 'sale' || kind === 'capture') && status === 'success';
+  });
   const orderTotal = allSales.reduce((s, t) => s + Number(t.amount ?? 0), 0);
   const otherAmount = orderTotal - totalGiftCardRedeemed;
 
   if (totalGiftCardRedeemed <= 0 || giftCardTxns.length === 0) {
-    return NextResponse.json({ ok: true, redeemed: 0, reason: 'no gift_card transactions' });
+    return NextResponse.json({
+      ok: true,
+      redeemed: 0,
+      reason: 'no gift_card transactions',
+      txn_source: txnSource,
+      total_txns: transactions.length,
+    });
   }
 
   // Identify the customer. Preferred: gift_card_id on transaction → customers.shopify_gift_card_id.
   // Fallback: order email.
   const giftCardIds = giftCardTxns
-    .map((t) => t.receipt?.gift_card_id)
+    .map((t) => {
+      const receipt = (t as { receipt?: { gift_card_id?: number | string } | null }).receipt;
+      return receipt?.gift_card_id;
+    })
     .filter((x): x is number | string => x !== null && x !== undefined)
     .map((x) => `gid://shopify/GiftCard/${x}`);
 
