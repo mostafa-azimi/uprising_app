@@ -38,6 +38,7 @@ const NAV: NavItem[] = [
       { href: '/admin/sync-shopify-balances', label: 'Sync balances from Shopify' },
       { href: '/admin/backfill-redemptions', label: 'Backfill redemptions' },
       { href: '/admin/klaviyo-failures', label: 'Klaviyo failures' },
+      { href: '/admin/push-to-klaviyo', label: 'Push to Klaviyo (catch-up)' },
       { href: '/test-connections', label: 'Test connections' },
     ],
   },

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { createSupabaseServiceClient } from '@/lib/supabase/server';
 import { RetryButton } from './retry-button';
+import { RetryAllButton } from './retry-all-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -102,11 +103,15 @@ export default async function KlaviyoFailuresPage() {
   return (
     <main className="min-h-screen px-8 py-10 max-w-6xl mx-auto">
       <Link href="/tools" className="text-sm text-muted hover:text-ink">← Tools</Link>
-      <h1 className="text-3xl font-bold mt-2 mb-1">Klaviyo sync failures</h1>
+      <div className="flex items-start justify-between gap-4 flex-wrap mt-2 mb-2">
+        <h1 className="text-3xl font-bold">Klaviyo sync failures</h1>
+        <RetryAllButton failureCount={failures.length} />
+      </div>
       <p className="text-sm text-muted mb-6">
         Customers where the last 3 attempts to push to Klaviyo all failed.
         DB and Shopify are correct — only Klaviyo is out of date for these customers.
-        Click &quot;Retry now&quot; to try again. Once a successful push happens, the row drops off.
+        Click &quot;Retry now&quot; on a row, or hit &quot;Retry all&quot; to mass-retry up to 200 at once.
+        Once a successful push happens, the row drops off.
       </p>
 
       {failures.length === 0 ? (
