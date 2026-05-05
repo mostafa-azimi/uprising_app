@@ -28,9 +28,14 @@ export default function ToolsPage() {
       <h2 className="text-lg font-semibold mb-3">Reconciliation & sync</h2>
       <section className="grid sm:grid-cols-2 gap-4 mb-10">
         <Card
+          href="/admin/sync-shopify-balances"
+          title="Sync balances from Shopify (auto)"
+          desc="Pull gift card balances directly from Shopify, preview discrepancies, then apply. Each adjustment writes a 'Shopify sync reconciliation' ledger entry."
+        />
+        <Card
           href="/admin/reconcile-shopify"
-          title="Reconcile from Shopify"
-          desc="Upload a fresh Shopify gift cards export to bring our DB in sync with Shopify's current balances."
+          title="Reconcile from Shopify (CSV)"
+          desc="Manual variant: upload a fresh Shopify gift cards export to bring our DB in sync. Use the auto sync above instead unless you have a reason to prefer the CSV."
         />
         <Card
           href="/admin/backfill-redemptions"
