@@ -36,6 +36,7 @@ const NAV: NavItem[] = [
       { href: '/admin/link-gift-cards', label: 'Link gift cards' },
       { href: '/admin/reconcile-shopify', label: 'Reconcile from Shopify (CSV)' },
       { href: '/admin/sync-shopify-balances', label: 'Sync balances from Shopify' },
+      { href: '/admin/materialize-grants', label: 'Materialize unlinked grants' },
       { href: '/admin/backfill-redemptions', label: 'Backfill redemptions' },
       { href: '/test-connections', label: 'Test connections' },
     ],
