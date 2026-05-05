@@ -3,9 +3,105 @@
  */
 
 import { createSupabaseServiceClient } from './supabase/server';
-import { giftCardCredit, giftCardDebit } from './shopify';
+import { giftCardCredit, giftCardDebit, getGiftCard } from './shopify';
 import { upsertProfile } from './klaviyo';
 import { recomputeBalance } from './customers';
+
+/**
+ * SYNC-TO-TOTAL: bring Shopify gift card balance to a target value, regardless
+ * of where it started. Used by manual adjust + expire so that drift between
+ * our DB and Shopify resolves into the new app total instead of pushing the
+ * delta blindly. Idempotent — calling twice with the same target is a no-op
+ * the second time.
+ *
+ * Returns the diff that was actually applied to Shopify (positive = credit,
+ * negative = debit, zero = no-op).
+ */
+async function syncShopifyToTarget(args: {
+  giftCardId: string;
+  newAppTotal: number;
+  noteForShopify: string;
+  customerIdForLog: string;
+}): Promise<{
+  ok: boolean;
+  shopify_before: number;
+  shopify_after: number;
+  diff_applied: number;
+  error?: string;
+}> {
+  const supabase = createSupabaseServiceClient();
+
+  // 1. Fetch current Shopify balance
+  let shopifyBefore: number;
+  try {
+    const card = await getGiftCard(args.giftCardId);
+    if (!card) {
+      throw new Error(`gift card not found in Shopify: ${args.giftCardId}`);
+    }
+    shopifyBefore = Number(card.balance.amount);
+  } catch (e) {
+    await supabase.from('sync_log').insert({
+      target: 'shopify',
+      operation: 'sync_to_total_fetch',
+      entity_id: args.customerIdForLog,
+      ok: false,
+      error_message: (e as Error).message,
+      request_body: { gift_card_id: args.giftCardId },
+    });
+    return {
+      ok: false,
+      shopify_before: 0,
+      shopify_after: 0,
+      diff_applied: 0,
+      error: `getGiftCard: ${(e as Error).message}`,
+    };
+  }
+
+  const target = Math.round(args.newAppTotal * 100) / 100;
+  const before = Math.round(shopifyBefore * 100) / 100;
+  const diff = Math.round((target - before) * 100) / 100;
+
+  // 2. No-op if already in sync
+  if (Math.abs(diff) < 0.005) {
+    return { ok: true, shopify_before: before, shopify_after: before, diff_applied: 0 };
+  }
+
+  // 3. Push diff to Shopify (credit if positive, debit if negative)
+  try {
+    if (diff > 0) {
+      await giftCardCredit(args.giftCardId, diff.toFixed(2), args.noteForShopify);
+    } else {
+      await giftCardDebit(args.giftCardId, Math.abs(diff).toFixed(2), args.noteForShopify);
+    }
+    return {
+      ok: true,
+      shopify_before: before,
+      shopify_after: target,
+      diff_applied: diff,
+    };
+  } catch (e) {
+    await supabase.from('sync_log').insert({
+      target: 'shopify',
+      operation: 'sync_to_total_push',
+      entity_id: args.customerIdForLog,
+      ok: false,
+      error_message: (e as Error).message,
+      request_body: {
+        gift_card_id: args.giftCardId,
+        new_app_total: target,
+        shopify_before: before,
+        diff,
+      },
+    });
+    return {
+      ok: false,
+      shopify_before: before,
+      shopify_after: before,
+      diff_applied: 0,
+      error: (e as Error).message,
+    };
+  }
+}
 
 export interface ExpireResult {
   email: string;
@@ -47,28 +143,9 @@ export async function expireCustomerBalance(
     return { email: customer.email, customer_id: customerId, prior_balance: 0, new_balance: 0, shopify_debited: 0, ok: true };
   }
 
-  // 1. Debit Shopify (skipped when caller explicitly opts out — used when
-  // the Shopify gift card balance is already correct or has been manually
-  // zeroed out and we just need to bring our DB in line).
-  let debited = 0;
-  if (!options?.skipShopify && customer.shopify_gift_card_id) {
-    try {
-      await giftCardDebit(customer.shopify_gift_card_id, priorBalance.toFixed(2), `${reason} — full balance expire`);
-      debited = priorBalance;
-    } catch (e) {
-      await supabase.from('sync_log').insert({
-        target: 'shopify',
-        operation: 'giftCardDebit_expire',
-        entity_id: customer.id,
-        ok: false,
-        error_message: (e as Error).message,
-        request_body: { amount: priorBalance, reason },
-      });
-      return { email: customer.email, customer_id: customerId, prior_balance: priorBalance, new_balance: priorBalance, shopify_debited: 0, ok: false, error: `Shopify: ${(e as Error).message}` };
-    }
-  }
-
-  // 2. Mark active grants as expired
+  // 1. Mark active grants expired in our DB FIRST. We've moved away from
+  // "push delta to Shopify" — the new model is sync-to-total: update DB,
+  // then bring Shopify to whatever DB says it should be (here: $0).
   const { data: activeGrants } = await supabase
     .from('grants')
     .select('id, remaining_amount')
@@ -82,7 +159,7 @@ export async function expireCustomerBalance(
       .update({ status: 'expired', remaining_amount: 0, expired_at: new Date().toISOString() })
       .in('id', ids);
 
-    // 3. Ledger entries
+    // Ledger entries (one per grant, captures original remaining_amount)
     const ledgerRows = activeGrants
       .filter((g) => Number(g.remaining_amount) > 0)
       .map((g) => ({
@@ -97,22 +174,37 @@ export async function expireCustomerBalance(
     if (ledgerRows.length) {
       await supabase.from('ledger').insert(ledgerRows);
     }
-  } else if (debited > 0) {
-    // No grants in our DB but customer had a Shopify balance (e.g. unmigrated card).
-    // Still write a single adjust ledger row so the activity is recorded.
-    await supabase.from('ledger').insert({
-      customer_id: customer.id,
-      grant_id: null,
-      type: 'expire',
-      amount: -debited,
-      description: `${reason} (no local grants — Shopify balance expired directly)`,
-      created_by: actor?.id ?? null,
-      created_by_email: actor?.email ?? null,
-    });
   }
 
-  // 4. Recompute balance + sync Klaviyo
+  // 2. Recompute balance (should now be $0)
   const newBalance = await recomputeBalance(customer.id);
+
+  // 3. Sync Shopify to the new app total ($0 after expire). Sync-to-total
+  // semantics: fetch Shopify, compute diff vs target ($0), debit by the diff.
+  // If Shopify was already at $0 (or wasn't in sync at all), this still does
+  // the right thing by ending Shopify at $0.
+  let debited = 0;
+  if (!options?.skipShopify && customer.shopify_gift_card_id) {
+    const sync = await syncShopifyToTarget({
+      giftCardId: customer.shopify_gift_card_id,
+      newAppTotal: newBalance,
+      noteForShopify: `${reason} — sync to $${newBalance.toFixed(2)}`,
+      customerIdForLog: customer.id,
+    });
+    if (!sync.ok) {
+      return {
+        email: customer.email,
+        customer_id: customerId,
+        prior_balance: priorBalance,
+        new_balance: newBalance,
+        shopify_debited: 0,
+        ok: false,
+        error: `Shopify: ${sync.error}`,
+      };
+    }
+    // diff_applied is negative when we debited (which is the expected case here)
+    debited = -sync.diff_applied;
+  }
 
   try {
     await upsertProfile({
@@ -362,17 +454,14 @@ export async function adjustCustomerBalance(args: {
     return { ok: false, new_balance: 0, error: 'Customer has no linked Shopify gift card' };
   }
 
-  if (amount > 0) {
-    // Credit path — add to gift card and create a synthetic grant
-    if (!args.skipShopify && customer.shopify_gift_card_id) {
-      try {
-        await giftCardCredit(customer.shopify_gift_card_id, amount.toFixed(2), reason);
-      } catch (e) {
-        return { ok: false, new_balance: Number(customer.total_balance_cached ?? 0), error: `Shopify: ${(e as Error).message}` };
-      }
-    }
+  // ----- DB updates first (sync-to-total model) -----
+  // We update the DB to reflect the new desired balance, then sync Shopify
+  // to that new total below. Order is intentionally DB-first so the resulting
+  // Shopify balance always converges on the app's truth, regardless of any
+  // prior drift between the two systems.
 
-    // Find or create a "Manual Adjustments" event
+  if (amount > 0) {
+    // Credit: create a synthetic grant on the "Manual Adjustments" event
     const { data: ev } = await supabase
       .from('events')
       .select('id')
@@ -391,6 +480,10 @@ export async function adjustCustomerBalance(args: {
     }
 
     const expiresOn = args.expiresOn ?? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    // Link the grant to the customer's Shopify card (if any) so reconcile
+    // tools and future syncs can find it. Falls back to NULL if customer
+    // has no card yet (rare; shouldn't happen since we required one above
+    // when skipShopify is off).
     const { data: grant } = await supabase
       .from('grants')
       .insert({
@@ -402,6 +495,8 @@ export async function adjustCustomerBalance(args: {
         reason: 'Manual',
         note: reason,
         status: 'active',
+        shopify_gift_card_id: customer.shopify_gift_card_id ?? null,
+        shopify_gift_card_code: customer.loyalty_card_code ?? null,
       })
       .select('id')
       .single();
@@ -416,16 +511,8 @@ export async function adjustCustomerBalance(args: {
       created_by_email: args.actor?.email ?? null,
     });
   } else {
-    // Debit path — reduce FIFO from active grants
+    // Debit: FIFO across active grants
     const debit = Math.abs(amount);
-    if (!args.skipShopify && customer.shopify_gift_card_id) {
-      try {
-        await giftCardDebit(customer.shopify_gift_card_id, debit.toFixed(2), reason);
-      } catch (e) {
-        return { ok: false, new_balance: Number(customer.total_balance_cached ?? 0), error: `Shopify: ${(e as Error).message}` };
-      }
-    }
-
     let remaining = debit;
     const { data: activeGrants } = await supabase
       .from('grants')
@@ -456,7 +543,29 @@ export async function adjustCustomerBalance(args: {
     }
   }
 
+  // Recompute the new app total from grants (truth)
   const newBalance = await recomputeBalance(customer.id);
+
+  // Sync-to-total: bring Shopify to the new app total. If they were drifted,
+  // this resolves it in DB's favor (which is the user's intent — the manual
+  // adjust is a deliberate "make Shopify match this number" action).
+  if (!args.skipShopify && customer.shopify_gift_card_id) {
+    const sync = await syncShopifyToTarget({
+      giftCardId: customer.shopify_gift_card_id,
+      newAppTotal: newBalance,
+      noteForShopify: `${reason} — sync to $${newBalance.toFixed(2)}`,
+      customerIdForLog: customer.id,
+    });
+    if (!sync.ok) {
+      // DB is already updated. Return the error so the UI can surface it.
+      // The next reconcile run will catch and resolve any residual drift.
+      return {
+        ok: false,
+        new_balance: newBalance,
+        error: `Shopify: ${sync.error} (DB updated but Shopify sync failed; run reconcile to resolve)`,
+      };
+    }
+  }
 
   try {
     await upsertProfile({
