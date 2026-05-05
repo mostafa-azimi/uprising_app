@@ -89,6 +89,13 @@ export default async function CustomerDetail({ params }: { params: Params }) {
   const expiredGrants = (grants ?? []).filter((g: { status: string }) => g.status === 'expired');
   const usedGrants = (grants ?? []).filter((g: { status: string }) => g.status === 'fully_redeemed');
 
+  // Build grant_id → expires_on lookup so the ledger can show the expiration
+  // beneath each grant-linked entry (Rise-style).
+  const expiresByGrantId = new Map<string, string>();
+  (grants ?? []).forEach((g: { id: string; expires_on: string }) => {
+    expiresByGrantId.set(g.id, g.expires_on);
+  });
+
   const shopifyAdminLink = customer.shopify_customer_id
     ? `https://admin.shopify.com/store/${process.env.SHOPIFY_STORE_DOMAIN?.replace('.myshopify.com', '')}/customers/${customer.shopify_customer_id.split('/').pop()}`
     : null;
@@ -183,21 +190,31 @@ export default async function CustomerDetail({ params }: { params: Params }) {
               </tr>
             </thead>
             <tbody>
-              {ledger.map((l) => (
-                <tr key={l.id} className="border-b border-line last:border-0">
-                  <td className="py-2 px-4 text-muted">{fmtDateTime(l.created_at)}</td>
-                  <td className="py-2 px-4">{ledgerTypeBadge(l.type)}</td>
-                  <td className={`py-2 px-4 font-semibold ${Number(l.amount) > 0 ? 'text-emerald-700' : 'text-bad'}`}>
-                    {Number(l.amount) > 0 ? '+' : ''}{fmtMoney(l.amount)}
-                  </td>
-                  <td className="py-2 px-4">{l.description ?? '—'}</td>
-                  <td className="py-2 px-4 text-xs text-muted font-mono">
-                    {l.shopify_order_id ? `order:${l.shopify_order_id.split('/').pop()}` :
-                     l.shopify_transaction_id ? `txn:${l.shopify_transaction_id.split('/').pop()}` :
-                     '—'}
-                  </td>
-                </tr>
-              ))}
+              {ledger.map((l) => {
+                const grantExp = l.grant_id ? expiresByGrantId.get(l.grant_id) : null;
+                // Only show "exp" under the amount for credit-issuing entries (positive amounts)
+                const showExp = grantExp && Number(l.amount) > 0;
+                return (
+                  <tr key={l.id} className="border-b border-line last:border-0">
+                    <td className="py-2 px-4 text-muted align-top">{fmtDateTime(l.created_at)}</td>
+                    <td className="py-2 px-4 align-top">{ledgerTypeBadge(l.type)}</td>
+                    <td className={`py-2 px-4 align-top font-semibold ${Number(l.amount) > 0 ? 'text-emerald-700' : 'text-bad'}`}>
+                      <div>{Number(l.amount) > 0 ? '+' : ''}{fmtMoney(l.amount)}</div>
+                      {showExp && (
+                        <div className={`text-xs font-normal mt-0.5 ${expirationClass(grantExp)}`}>
+                          exp {fmtDate(grantExp)}
+                        </div>
+                      )}
+                    </td>
+                    <td className="py-2 px-4 align-top">{l.description ?? '—'}</td>
+                    <td className="py-2 px-4 text-xs text-muted font-mono align-top">
+                      {l.shopify_order_id ? `order:${l.shopify_order_id.split('/').pop()}` :
+                       l.shopify_transaction_id ? `txn:${l.shopify_transaction_id.split('/').pop()}` :
+                       '—'}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
