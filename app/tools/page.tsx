@@ -50,11 +50,20 @@ export default function ToolsPage() {
       </section>
 
       <h2 className="text-lg font-semibold mb-3">Upload</h2>
-      <section className="grid sm:grid-cols-2 gap-4">
+      <section className="grid sm:grid-cols-2 gap-4 mb-10">
         <Card
           href="/upload/grants"
           title="Upload event credits"
           desc="Standard upload flow with optional Skip Shopify / Skip Klaviyo toggles for DB-only backfills."
+        />
+      </section>
+
+      <h2 className="text-lg font-semibold mb-3">Temporary cleanup tools</h2>
+      <section className="grid sm:grid-cols-2 gap-4">
+        <Card
+          href="/tools/temporary"
+          title="Temporary tools →"
+          desc="One-time data cleanup utilities for backfilling Shopify links. Not part of the regular operational toolkit."
         />
       </section>
     </main>

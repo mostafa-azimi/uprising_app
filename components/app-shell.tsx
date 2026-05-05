@@ -41,6 +41,14 @@ const NAV: NavItem[] = [
     ],
   },
   {
+    href: '/tools/temporary',
+    label: 'Temporary tools',
+    children: [
+      { href: '/admin/upload-loyalty-codes', label: 'Upload loyalty codes (temp)' },
+      { href: '/admin/link-by-code', label: 'Link gift cards by code (temp)' },
+    ],
+  },
+  {
     href: '/settings',
     label: 'Settings',
     children: [
