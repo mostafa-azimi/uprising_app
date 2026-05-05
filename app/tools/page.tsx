@@ -49,6 +49,20 @@ export default function ToolsPage() {
         />
       </section>
 
+      <h2 className="text-lg font-semibold mb-3">Klaviyo</h2>
+      <section className="grid sm:grid-cols-2 gap-4 mb-10">
+        <Card
+          href="/admin/klaviyo-failures"
+          title="Klaviyo failures"
+          desc="Customers whose Klaviyo push retried 3 times and still failed. Per-row Retry now or one-click Retry all to flush the entire backlog."
+        />
+        <Card
+          href="/admin/push-to-klaviyo"
+          title="Push to Klaviyo (catch-up)"
+          desc="Re-push current DB state (loyalty_card_code, balance, expiration) to Klaviyo for every customer with a balance change in a date range. Use this after Klaviyo outages."
+        />
+      </section>
+
       <h2 className="text-lg font-semibold mb-3">Upload</h2>
       <section className="grid sm:grid-cols-2 gap-4 mb-10">
         <Card
