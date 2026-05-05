@@ -2,9 +2,10 @@
  * Expire / adjust balance helpers — used by single-customer and bulk actions.
  */
 
+import { waitUntil } from '@vercel/functions';
 import { createSupabaseServiceClient } from './supabase/server';
 import { giftCardCredit, giftCardDebit, getGiftCard } from './shopify';
-import { upsertProfile } from './klaviyo';
+import { upsertProfile, upsertProfileWithRetry } from './klaviyo';
 import { recomputeBalance } from './customers';
 
 /**
@@ -206,8 +207,10 @@ export async function expireCustomerBalance(
     debited = -sync.diff_applied;
   }
 
-  try {
-    await upsertProfile({
+  // Push to Klaviyo in the background — don't block on Klaviyo's sometimes-slow
+  // profile API. The retry helper handles its own retry/timeout/logging.
+  waitUntil(
+    upsertProfileWithRetry({
       email: customer.email,
       first_name: customer.first_name ?? undefined,
       last_name: customer.last_name ?? undefined,
@@ -215,16 +218,10 @@ export async function expireCustomerBalance(
         loyalty_card_balance: newBalance,
         loyalty_card_code: customer.loyalty_card_code ?? undefined,
       },
-    });
-  } catch (e) {
-    await supabase.from('sync_log').insert({
-      target: 'klaviyo',
-      operation: 'profile_property_sync_expire',
-      entity_id: customer.id,
-      ok: false,
-      error_message: (e as Error).message,
-    });
-  }
+      customer_id_for_log: customer.id,
+      reason: `manual-expire (${reason})`,
+    })
+  );
 
   return { email: customer.email, customer_id: customerId, prior_balance: priorBalance, new_balance: newBalance, shopify_debited: debited, ok: true };
 }
@@ -567,8 +564,10 @@ export async function adjustCustomerBalance(args: {
     }
   }
 
-  try {
-    await upsertProfile({
+  // Background Klaviyo push (3-attempt retry with growing timeouts; logs every
+  // attempt to sync_log; terminal failure surfaces in the in-app banner).
+  waitUntil(
+    upsertProfileWithRetry({
       email: customer.email,
       first_name: customer.first_name ?? undefined,
       last_name: customer.last_name ?? undefined,
@@ -577,10 +576,10 @@ export async function adjustCustomerBalance(args: {
         loyalty_card_code: customer.loyalty_card_code ?? undefined,
         last_reward: amount > 0 ? amount : undefined,
       },
-    });
-  } catch {
-    /* non-fatal */
-  }
+      customer_id_for_log: customer.id,
+      reason: `manual-adjust (${reason})`,
+    })
+  );
 
   return { ok: true, new_balance: newBalance };
 }

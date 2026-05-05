@@ -1,8 +1,9 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { waitUntil } from '@vercel/functions';
 import { createSupabaseServiceClient } from '@/lib/supabase/server';
 import { requireAdmin } from '@/lib/auth';
 import { recomputeBalance } from '@/lib/customers';
-import { upsertProfile } from '@/lib/klaviyo';
+import { upsertProfileWithRetry } from '@/lib/klaviyo';
 import { giftCardDebit, getGiftCard } from '@/lib/shopify';
 
 export const dynamic = 'force-dynamic';
@@ -505,10 +506,22 @@ export async function POST(request: NextRequest) {
       result.outcomes.push(outcome);
     }
 
-    // Recompute total_balance_cached for every affected customer + push to Klaviyo
+    // Recompute total_balance_cached synchronously (fast — DB only). Klaviyo
+    // pushes happen in the BACKGROUND via waitUntil so the response isn't
+    // blocked when Klaviyo is slow or down.
     log('info', 'recomputing_balances', { count: affectedCustomerIds.size });
     const idList = Array.from(affectedCustomerIds);
     const CHUNK = 25;
+    interface KlaviyoTask {
+      customer_id: string;
+      email: string;
+      first_name: string | null;
+      last_name: string | null;
+      loyalty_card_code: string | null;
+      new_balance: number;
+    }
+    const klaviyoTasks: KlaviyoTask[] = [];
+
     for (let i = 0; i < idList.length; i += CHUNK) {
       const slice = idList.slice(i, i + CHUNK);
       const { data: customers } = await supabase
@@ -520,24 +533,40 @@ export async function POST(request: NextRequest) {
         try {
           const newBalance = await recomputeBalance(c.id);
           result.customers_recomputed++;
-          try {
-            await upsertProfile({
-              email: c.email,
-              first_name: c.first_name ?? undefined,
-              last_name: c.last_name ?? undefined,
-              properties: {
-                loyalty_card_balance: newBalance,
-                ...(c.loyalty_card_code ? { loyalty_card_code: c.loyalty_card_code } : {}),
-              },
-            });
-            result.klaviyo_pushed++;
-          } catch {
-            result.klaviyo_errors++;
-          }
+          klaviyoTasks.push({
+            customer_id: c.id,
+            email: c.email,
+            first_name: c.first_name,
+            last_name: c.last_name,
+            loyalty_card_code: c.loyalty_card_code,
+            new_balance: newBalance,
+          });
         } catch (e) {
           log('warn', 'recompute_failed', { customer_id: c.id, error: (e as Error).message });
         }
       }));
+    }
+
+    if (klaviyoTasks.length > 0) {
+      waitUntil(
+        (async () => {
+          for (const t of klaviyoTasks) {
+            const r = await upsertProfileWithRetry({
+              email: t.email,
+              first_name: t.first_name ?? undefined,
+              last_name: t.last_name ?? undefined,
+              properties: {
+                loyalty_card_balance: t.new_balance,
+                ...(t.loyalty_card_code ? { loyalty_card_code: t.loyalty_card_code } : {}),
+              },
+              customer_id_for_log: t.customer_id,
+              reason: 'shopify-sync-reconciliation',
+            });
+            if (r.ok) result.klaviyo_pushed++;
+            else result.klaviyo_errors++;
+          }
+        })()
+      );
     }
 
     result.total_delta_applied = Math.round(result.total_delta_applied * 100) / 100;

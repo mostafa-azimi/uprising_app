@@ -253,6 +253,144 @@ export async function upsertProfile(args: {
 }
 
 /**
+ * Klaviyo upsert with timeout + retry + persistent failure logging.
+ * Designed to run inside Vercel `waitUntil(...)` so apply routes don't block.
+ *
+ * Behavior:
+ *   - 3 attempts with growing per-attempt timeouts (10s, 20s, 30s)
+ *   - Each attempt logs to sync_log (target='klaviyo', operation='profile_property_sync')
+ *   - On terminal failure, writes operation='profile_property_sync_failed_after_retries'
+ *     so the in-app banner / failures page can surface it.
+ *   - Returns { ok: true } on first success, never throws.
+ */
+export async function upsertProfileWithRetry(args: {
+  email: string;
+  first_name?: string;
+  last_name?: string;
+  properties?: RiseProfileProps & Record<string, unknown>;
+  customer_id_for_log: string;
+  reason?: string;
+}): Promise<{ ok: boolean; attempts: number; error?: string }> {
+  const { createSupabaseServiceClient } = await import('./supabase/server');
+  const supabase = createSupabaseServiceClient();
+
+  const attempts = [
+    { timeout_ms: 10_000, delay_before_ms: 0 },
+    { timeout_ms: 20_000, delay_before_ms: 2_000 },
+    { timeout_ms: 30_000, delay_before_ms: 5_000 },
+  ];
+
+  let lastError: string = 'unknown';
+
+  for (let i = 0; i < attempts.length; i++) {
+    const a = attempts[i];
+    if (a.delay_before_ms > 0) {
+      await new Promise((r) => setTimeout(r, a.delay_before_ms));
+    }
+
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), a.timeout_ms);
+    const tStart = Date.now();
+    try {
+      const body = {
+        data: {
+          type: 'profile',
+          attributes: {
+            email: args.email,
+            first_name: args.first_name,
+            last_name: args.last_name,
+            properties: args.properties,
+          },
+        },
+      };
+      const createRes = await fetch(`${BASE}/profiles/`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(body),
+        cache: 'no-store',
+        signal: ctrl.signal,
+      });
+
+      if (createRes.status === 201 || createRes.status === 200) {
+        clearTimeout(timer);
+        await supabase.from('sync_log').insert({
+          target: 'klaviyo',
+          operation: 'profile_property_sync',
+          entity_id: args.customer_id_for_log,
+          ok: true,
+          status_code: createRes.status,
+          request_body: { attempt: i + 1, ms: Date.now() - tStart, reason: args.reason ?? null },
+        });
+        return { ok: true, attempts: i + 1 };
+      }
+
+      if (createRes.status === 409) {
+        const conflict = (await createRes.json()) as {
+          errors?: Array<{ meta?: { duplicate_profile_id?: string } }>;
+        };
+        const id = conflict.errors?.[0]?.meta?.duplicate_profile_id;
+        if (!id) throw new Error('Klaviyo 409 without duplicate_profile_id');
+
+        const patchBody = { data: { type: 'profile', id, attributes: body.data.attributes } };
+        const patchRes = await fetch(`${BASE}/profiles/${id}/`, {
+          method: 'PATCH',
+          headers: headers(),
+          body: JSON.stringify(patchBody),
+          cache: 'no-store',
+          signal: ctrl.signal,
+        });
+        clearTimeout(timer);
+        if (!patchRes.ok) {
+          throw new Error(`Klaviyo patch ${patchRes.status}: ${(await patchRes.text()).slice(0, 300)}`);
+        }
+        await supabase.from('sync_log').insert({
+          target: 'klaviyo',
+          operation: 'profile_property_sync',
+          entity_id: args.customer_id_for_log,
+          ok: true,
+          status_code: patchRes.status,
+          request_body: { attempt: i + 1, ms: Date.now() - tStart, mode: 'patch', reason: args.reason ?? null },
+        });
+        return { ok: true, attempts: i + 1 };
+      }
+
+      const errText = await createRes.text();
+      throw new Error(`Klaviyo create profile ${createRes.status}: ${errText.slice(0, 300)}`);
+    } catch (e) {
+      clearTimeout(timer);
+      const msg = (e as Error).name === 'AbortError'
+        ? `attempt ${i + 1}: timeout after ${a.timeout_ms}ms`
+        : `attempt ${i + 1}: ${(e as Error).message}`;
+      lastError = msg;
+      await supabase.from('sync_log').insert({
+        target: 'klaviyo',
+        operation: 'profile_property_sync',
+        entity_id: args.customer_id_for_log,
+        ok: false,
+        error_message: msg,
+        request_body: { attempt: i + 1, ms: Date.now() - tStart, reason: args.reason ?? null },
+      });
+    }
+  }
+
+  await supabase.from('sync_log').insert({
+    target: 'klaviyo',
+    operation: 'profile_property_sync_failed_after_retries',
+    entity_id: args.customer_id_for_log,
+    ok: false,
+    error_message: lastError,
+    request_body: {
+      email: args.email,
+      properties: args.properties,
+      reason: args.reason ?? null,
+      total_attempts: attempts.length,
+    },
+  });
+
+  return { ok: false, attempts: attempts.length, error: lastError };
+}
+
+/**
  * Update only the four Rise-compatible properties on an existing profile.
  * Use when you have the Klaviyo profile ID already.
  */

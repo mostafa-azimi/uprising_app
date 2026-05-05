@@ -37,6 +37,7 @@ const NAV: NavItem[] = [
       { href: '/admin/reconcile-shopify', label: 'Reconcile from Shopify (CSV)' },
       { href: '/admin/sync-shopify-balances', label: 'Sync balances from Shopify' },
       { href: '/admin/backfill-redemptions', label: 'Backfill redemptions' },
+      { href: '/admin/klaviyo-failures', label: 'Klaviyo failures' },
       { href: '/test-connections', label: 'Test connections' },
     ],
   },
@@ -73,10 +74,11 @@ function isSectionActive(pathname: string, item: NavItem): boolean {
 
 interface AppShellProps {
   userEmail: string | null;
+  klaviyoFailureCount?: number;
   children: React.ReactNode;
 }
 
-export function AppShell({ userEmail, children }: AppShellProps) {
+export function AppShell({ userEmail, klaviyoFailureCount = 0, children }: AppShellProps) {
   const pathname = usePathname() ?? '/';
 
   // Bare-mode passthrough for unauthenticated / standalone pages
@@ -92,7 +94,18 @@ export function AppShell({ userEmail, children }: AppShellProps) {
   return (
     <div className="min-h-screen flex bg-slate-50">
       <Sidebar pathname={pathname} userEmail={userEmail} />
-      <div className="flex-1 ml-60 min-w-0">{children}</div>
+      <div className="flex-1 ml-60 min-w-0">
+        {klaviyoFailureCount > 0 && (
+          <Link
+            href="/admin/klaviyo-failures"
+            className="block bg-bad text-white px-6 py-3 text-sm font-medium hover:bg-red-700 transition"
+          >
+            ⚠ {klaviyoFailureCount} Klaviyo sync {klaviyoFailureCount === 1 ? 'failure needs' : 'failures need'} resolution
+            <span className="ml-2 underline opacity-90">View and retry →</span>
+          </Link>
+        )}
+        {children}
+      </div>
     </div>
   );
 }
