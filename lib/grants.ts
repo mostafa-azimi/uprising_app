@@ -343,6 +343,17 @@ export async function processRiseRow(args: {
   }
 
   // --- 4. Insert grant + ledger ---
+  // Link the grant to the Shopify gift card (if we hit Shopify) or to the
+  // customer's already-linked card (if we skipped Shopify but the customer
+  // is already linked to one). Without this, the auto-sync reconciliation
+  // tool can't find the grant for comparison.
+  const grantShopifyGiftCardId =
+    giftCard?.id ?? customer.shopify_gift_card_id ?? null;
+  const grantShopifyGiftCardCode =
+    giftCard?.code ?? customer.loyalty_card_code ?? null;
+  const grantShopifyGiftCardLast4 =
+    giftCard?.last4 ?? customer.shopify_gift_card_last4 ?? null;
+
   let grantId: string;
   try {
     const { data: grant, error: gErr } = await supabase
@@ -356,6 +367,9 @@ export async function processRiseRow(args: {
         reason: row.reason || null,
         note: row.note || null,
         status: 'active',
+        shopify_gift_card_id: grantShopifyGiftCardId,
+        shopify_gift_card_code: grantShopifyGiftCardCode,
+        shopify_gift_card_last4: grantShopifyGiftCardLast4,
       })
       .select('id')
       .single();
