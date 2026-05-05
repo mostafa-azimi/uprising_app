@@ -78,6 +78,8 @@ export default function SyncShopifyBalancesPage() {
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   // Per-row expiration override (default: row's earliest existing expiration)
   const [expOverrides, setExpOverrides] = useState<Record<string, string>>({});
+  // Bulk date input for "Set expiration for all selected"
+  const [bulkExp, setBulkExp] = useState<string>('');
   // Sort state
   const [sortKey, setSortKey] = useState<SortKey>('diff');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -146,6 +148,23 @@ export default function SyncShopifyBalancesPage() {
 
   function setExp(k: string, v: string) {
     setExpOverrides((prev) => ({ ...prev, [k]: v }));
+  }
+
+  // Bulk-set: apply a date to every currently-selected row
+  function applyExpToAllSelected(date: string) {
+    if (!date || selectedKeys.size === 0) return;
+    setExpOverrides((prev) => {
+      const next = { ...prev };
+      selectedKeys.forEach((k) => { next[k] = date; });
+      return next;
+    });
+  }
+
+  // Per-row "fill down": copy one row's date to every selected row
+  function copyExpToAllSelected(fromKey: string) {
+    const date = expOverrides[fromKey];
+    if (!date) return;
+    applyExpToAllSelected(date);
   }
 
   async function runPreview() {
@@ -291,7 +310,7 @@ export default function SyncShopifyBalancesPage() {
           ) : (
             <>
               <section className="border border-line rounded-xl bg-white p-0 mb-6 overflow-hidden">
-                <div className="px-6 py-4 border-b border-line flex items-center justify-between">
+                <div className="px-6 py-4 border-b border-line flex items-center justify-between flex-wrap gap-3">
                   <div>
                     <h2 className="font-bold">Discrepancies ({preview.discrepancy_count})</h2>
                     <p className="text-xs text-muted">
@@ -301,6 +320,27 @@ export default function SyncShopifyBalancesPage() {
                   <div className="text-sm">
                     <strong>{selectedCount}</strong> of {preview.rows.length} selected
                   </div>
+                </div>
+                <div className="px-6 py-3 bg-slate-50 border-b border-line flex items-center gap-3 flex-wrap text-sm">
+                  <span className="text-muted">Set expiration for all selected:</span>
+                  <input
+                    type="date"
+                    value={bulkExp}
+                    onChange={(e) => setBulkExp(e.target.value)}
+                    className="border border-line rounded px-2 py-1 text-xs"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => applyExpToAllSelected(bulkExp)}
+                    disabled={!bulkExp || selectedCount === 0}
+                    className="bg-ink text-white px-3 py-1 rounded text-xs font-medium disabled:opacity-50"
+                    title="Set this date on every selected row"
+                  >
+                    Apply to {selectedCount} selected
+                  </button>
+                  <span className="text-xs text-muted">
+                    · Or use the <strong>↓</strong> button on any row to copy that row&apos;s date down to all selected.
+                  </span>
                 </div>
                 <div className="overflow-auto max-h-[600px]">
                   <table className="w-full text-sm">
@@ -355,13 +395,24 @@ export default function SyncShopifyBalancesPage() {
                               {r.diff >= 0 ? '+' : ''}${r.diff.toFixed(2)}
                             </td>
                             <td className="py-1.5 px-3">
-                              <input
-                                type="date"
-                                value={exp}
-                                onChange={(e) => setExp(k, e.target.value)}
-                                className={`text-xs border rounded px-1 py-0.5 ${dateChanged ? 'border-warn bg-yellow-50' : 'border-line'}`}
-                                title={dateChanged ? `Will update from ${r.expires_on_earliest ?? '(none)'}` : 'Earliest grant expiration on this card'}
-                              />
+                              <div className="flex items-center gap-1">
+                                <input
+                                  type="date"
+                                  value={exp}
+                                  onChange={(e) => setExp(k, e.target.value)}
+                                  className={`text-xs border rounded px-1 py-0.5 ${dateChanged ? 'border-warn bg-yellow-50' : 'border-line'}`}
+                                  title={dateChanged ? `Will update from ${r.expires_on_earliest ?? '(none)'}` : 'Earliest grant expiration on this card'}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => copyExpToAllSelected(k)}
+                                  disabled={!exp || selectedCount === 0}
+                                  className="text-xs px-1.5 py-0.5 rounded border border-line text-muted hover:text-ink hover:border-ink disabled:opacity-30 disabled:cursor-not-allowed"
+                                  title={`Copy this date (${exp || 'none'}) to all ${selectedCount} selected rows`}
+                                >
+                                  ↓
+                                </button>
+                              </div>
                             </td>
                             <td className="py-1.5 px-3 text-right text-xs text-muted">{r.affected_grant_ids.length}</td>
                           </tr>
