@@ -38,11 +38,6 @@ export default function ToolsPage() {
           desc="Manual variant: upload a fresh Shopify gift cards export to bring our DB in sync. Use the auto sync above instead unless you have a reason to prefer the CSV."
         />
         <Card
-          href="/admin/materialize-grants"
-          title="Materialize unlinked grants"
-          desc="Create Shopify gift cards for customers whose grants exist only in our DB (e.g. from skip-Shopify uploads). Two-phase preview + apply."
-        />
-        <Card
           href="/admin/backfill-redemptions"
           title="Backfill redemptions"
           desc="Pull paid Shopify orders in a date range and process gift_card transactions through the same logic as the orders/paid webhook. Updates balances + revenue attribution."
