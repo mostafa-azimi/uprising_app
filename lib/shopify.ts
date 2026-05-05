@@ -440,25 +440,27 @@ export async function paginatePaidOrdersSince(args: {
   let pages = 0;
 
   while (nextPath && pages < maxPages) {
-    const { data, linkHeader } = await shopifyRest<{ orders: ShopifyOrderSummary[] }>(nextPath);
-    all.push(...(data.orders ?? []));
+    const response: { data: { orders: ShopifyOrderSummary[] }; linkHeader: string | null } =
+      await shopifyRest<{ orders: ShopifyOrderSummary[] }>(nextPath);
+    all.push(...(response.data.orders ?? []));
     pages++;
 
     // Parse Link header for next page cursor
-    nextPath = null;
-    if (linkHeader) {
-      const matches = linkHeader.split(',').map((s) => s.trim());
+    let nextFromLink: string | null = null;
+    if (response.linkHeader) {
+      const matches = response.linkHeader.split(',').map((s) => s.trim());
       for (const m of matches) {
         const rel = /rel="([^"]+)"/.exec(m)?.[1];
         const url = /<([^>]+)>/.exec(m)?.[1];
         if (rel === 'next' && url) {
           // url is absolute; we just need the query string after orders.json
           const u = new URL(url);
-          nextPath = `orders.json${u.search}`;
+          nextFromLink = `orders.json${u.search}`;
           break;
         }
       }
     }
+    nextPath = nextFromLink;
   }
 
   return all;
