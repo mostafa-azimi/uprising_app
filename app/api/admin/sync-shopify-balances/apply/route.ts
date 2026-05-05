@@ -30,6 +30,7 @@ interface ApplyRow {
   shopify_balance: number;             // target value
   db_total_remaining: number;          // what preview saw
   diff: number;                        // shopify - db at preview time
+  expires_on?: string | null;          // optional override; if set, applies to all active grants on this card
 }
 
 interface ApplyOutcome {
@@ -40,6 +41,7 @@ interface ApplyOutcome {
   prior_db_total: number;
   new_db_total: number;
   delta_applied: number;
+  expiration_changed?: boolean;
   detail?: string;
 }
 
@@ -130,6 +132,14 @@ export async function POST(request: NextRequest) {
       };
 
       try {
+        // Validate optional expires_on override (YYYY-MM-DD)
+        const rowExpiresOn = (row.expires_on && /^\d{4}-\d{2}-\d{2}$/.test(row.expires_on))
+          ? row.expires_on
+          : null;
+        if (row.expires_on && !rowExpiresOn) {
+          throw new Error(`invalid expires_on '${row.expires_on}' (expected YYYY-MM-DD)`);
+        }
+
         // Re-fetch current grants for this (customer, card). If the live DB
         // total has drifted from what preview saw, skip and report "stale".
         const { data: grants, error } = await supabase
@@ -155,7 +165,18 @@ export async function POST(request: NextRequest) {
 
         const targetBalance = Math.round(row.shopify_balance * 100) / 100;
         const liveDelta = targetBalance - liveDbTotal;
-        if (Math.abs(liveDelta) < 0.005) {
+
+        // Compute effective expires_on per grant: row override (if any) wins
+        type AugGrant = typeof activeGrants[number] & { effective_expires_on: string };
+        const augmented: AugGrant[] = activeGrants.map((g) => ({
+          ...g,
+          effective_expires_on: rowExpiresOn ?? g.expires_on,
+        }));
+        const dateWillChangeForAny = rowExpiresOn !== null
+          && augmented.some((g) => g.expires_on !== rowExpiresOn);
+
+        // If balance is already in sync AND no date change is requested, skip
+        if (Math.abs(liveDelta) < 0.005 && !dateWillChangeForAny) {
           outcome.status = 'in_sync';
           outcome.new_db_total = liveDbTotal;
           result.rows_in_sync++;
@@ -164,9 +185,8 @@ export async function POST(request: NextRequest) {
         }
 
         // Apportion delta across grants
-        // - Negative liveDelta (DB > Shopify): FIFO debit by oldest expires_on
-        // - Positive liveDelta (DB < Shopify): credit newest expires_on
-        let remainingToApply = liveDelta;
+        // - Negative liveDelta (DB > Shopify): FIFO debit by oldest effective expires_on
+        // - Positive liveDelta (DB < Shopify): credit newest effective expires_on
         const ledgerInserts: Array<{
           customer_id: string;
           grant_id: string;
@@ -176,42 +196,44 @@ export async function POST(request: NextRequest) {
           created_by: string | null;
           created_by_email: string | null;
         }> = [];
-        const grantUpdates: Array<{
-          id: string;
-          new_remaining: number;
-          new_status: 'active' | 'fully_redeemed' | 'expired';
-        }> = [];
+        // Tracks a per-grant new remaining if it gets debited/credited.
+        // Grants not touched by balance change still get an expires_on update if rowExpiresOn is set.
+        const grantBalanceChanges = new Map<string, number>(); // grant_id → new_remaining
 
-        if (liveDelta < 0) {
-          // Debit: oldest expires_on first
-          const ordered = [...activeGrants].sort((a, b) => a.expires_on.localeCompare(b.expires_on));
-          let toDebit = -liveDelta; // positive amount we need to remove
+        const dateNote = dateWillChangeForAny ? `; expiration set to ${rowExpiresOn}` : '';
+        const balanceNote = Math.abs(liveDelta) >= 0.005
+          ? `set total to $${targetBalance.toFixed(2)} (was $${liveDbTotal.toFixed(2)})`
+          : `total unchanged at $${liveDbTotal.toFixed(2)}`;
+        const baseDesc = `Shopify sync reconciliation — ${balanceNote}${dateNote}`;
+
+        if (liveDelta < -0.005) {
+          // Debit oldest effective-expiration first
+          const ordered = [...augmented].sort(
+            (a, b) => a.effective_expires_on.localeCompare(b.effective_expires_on)
+              || a.id.localeCompare(b.id)
+          );
+          let toDebit = -liveDelta;
           for (const g of ordered) {
             if (toDebit <= 0.005) break;
             const cur = Number(g.remaining_amount);
             const take = Math.min(cur, toDebit);
             const newRem = Math.round((cur - take) * 100) / 100;
-            grantUpdates.push({
-              id: g.id,
-              new_remaining: newRem,
-              new_status: statusForGrant(newRem, g.expires_on),
-            });
+            grantBalanceChanges.set(g.id, newRem);
             ledgerInserts.push({
               customer_id: row.customer_id,
               grant_id: g.id,
               type: 'adjust',
               amount: -Math.round(take * 100) / 100,
-              description: `Shopify sync reconciliation — set total to $${targetBalance.toFixed(2)} (was $${liveDbTotal.toFixed(2)})`,
+              description: baseDesc,
               created_by: user.id,
               created_by_email: user.email ?? 'shopify sync',
             });
             toDebit -= take;
           }
           if (toDebit > 0.01) {
-            // Couldn't fully debit — DB has less than expected. Record an unmatched entry.
             ledgerInserts.push({
               customer_id: row.customer_id,
-              grant_id: '',          // will be replaced with null below
+              grant_id: '',
               type: 'adjust',
               amount: -Math.round(toDebit * 100) / 100,
               description: `Shopify sync reconciliation — unmatched residual ($${toDebit.toFixed(2)} not allocatable to a grant)`,
@@ -219,12 +241,14 @@ export async function POST(request: NextRequest) {
               created_by_email: user.email ?? 'shopify sync',
             });
           }
-        } else {
-          // Credit: newest grant first (longest expiration window)
-          const ordered = [...activeGrants].sort((a, b) => b.expires_on.localeCompare(a.expires_on));
-          let toCredit = liveDelta;
+        } else if (liveDelta > 0.005) {
+          // Credit newest effective-expiration first
+          const ordered = [...augmented].sort(
+            (a, b) => b.effective_expires_on.localeCompare(a.effective_expires_on)
+              || b.id.localeCompare(a.id)
+          );
+          const toCredit = liveDelta;
           if (ordered.length === 0) {
-            // No active grant to credit — record as unmatched ledger entry, no grant updates
             ledgerInserts.push({
               customer_id: row.customer_id,
               grant_id: '',
@@ -234,41 +258,64 @@ export async function POST(request: NextRequest) {
               created_by: user.id,
               created_by_email: user.email ?? 'shopify sync',
             });
-            toCredit = 0;
           } else {
             const target = ordered[0];
             const cur = Number(target.remaining_amount);
             const newRem = Math.round((cur + toCredit) * 100) / 100;
-            grantUpdates.push({
-              id: target.id,
-              new_remaining: newRem,
-              new_status: statusForGrant(newRem, target.expires_on),
-            });
+            grantBalanceChanges.set(target.id, newRem);
             ledgerInserts.push({
               customer_id: row.customer_id,
               grant_id: target.id,
               type: 'adjust',
               amount: Math.round(toCredit * 100) / 100,
-              description: `Shopify sync reconciliation — set total to $${targetBalance.toFixed(2)} (was $${liveDbTotal.toFixed(2)})`,
+              description: baseDesc,
               created_by: user.id,
               created_by_email: user.email ?? 'shopify sync',
             });
-            toCredit = 0;
           }
         }
 
-        // Write grant updates
+        // Compute final grant updates: combines balance changes (if any) AND date changes (if any).
+        // Every active grant gets touched if rowExpiresOn is set so the date is uniform across the card.
+        const grantUpdates: Array<{
+          id: string;
+          new_remaining: number;
+          new_expires_on: string;
+          new_status: 'active' | 'fully_redeemed' | 'expired';
+          date_changed: boolean;
+        }> = augmented.map((g) => {
+          const newRem = grantBalanceChanges.has(g.id)
+            ? grantBalanceChanges.get(g.id)!
+            : Number(g.remaining_amount);
+          const effDate = g.effective_expires_on;
+          return {
+            id: g.id,
+            new_remaining: newRem,
+            new_expires_on: effDate,
+            new_status: statusForGrant(newRem, effDate),
+            date_changed: rowExpiresOn !== null && g.expires_on !== rowExpiresOn,
+          };
+        });
+
+        // Write grant updates — only ones that actually need a write
         for (const u of grantUpdates) {
+          const willChange =
+            grantBalanceChanges.has(u.id) ||
+            u.date_changed ||
+            u.new_status !== augmented.find((g) => g.id === u.id)!.status;
+          if (!willChange) continue;
           const updates: Record<string, unknown> = {
             remaining_amount: u.new_remaining,
             status: u.new_status,
           };
+          if (u.date_changed) updates.expires_on = u.new_expires_on;
           if (u.new_status === 'expired' || u.new_status === 'fully_redeemed') {
             updates.expired_at = new Date().toISOString();
           }
           const { error: upErr } = await supabase.from('grants').update(updates).eq('id', u.id);
           if (upErr) throw new Error(`grant update ${u.id}: ${upErr.message}`);
         }
+        outcome.expiration_changed = dateWillChangeForAny;
 
         // Write ledger entries (replace empty grant_id with null for unmatched residuals)
         const ledgerPayload = ledgerInserts.map((l) => ({

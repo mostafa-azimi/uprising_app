@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 
 interface DiscrepancyRow {
@@ -39,6 +39,7 @@ interface ApplyOutcome {
   prior_db_total: number;
   new_db_total: number;
   delta_applied: number;
+  expiration_changed?: boolean;
   detail?: string;
 }
 
@@ -58,6 +59,13 @@ interface ApplyResult {
   outcomes: ApplyOutcome[];
 }
 
+type SortKey = 'email' | 'last4' | 'db' | 'shopify' | 'diff' | 'expires';
+type SortDir = 'asc' | 'desc';
+
+function rowKey(r: { customer_id: string; shopify_gift_card_id: string }): string {
+  return `${r.customer_id}|${r.shopify_gift_card_id}`;
+}
+
 export default function SyncShopifyBalancesPage() {
   const [previewBusy, setPreviewBusy] = useState(false);
   const [applyBusy, setApplyBusy] = useState(false);
@@ -65,6 +73,80 @@ export default function SyncShopifyBalancesPage() {
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+
+  // Per-row selection (default: all selected after preview loads)
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  // Per-row expiration override (default: row's earliest existing expiration)
+  const [expOverrides, setExpOverrides] = useState<Record<string, string>>({});
+  // Sort state
+  const [sortKey, setSortKey] = useState<SortKey>('diff');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+
+  // When a fresh preview lands, default-select all rows and seed expiration inputs
+  useEffect(() => {
+    if (!preview) {
+      setSelectedKeys(new Set());
+      setExpOverrides({});
+      return;
+    }
+    const keys = new Set<string>();
+    const dates: Record<string, string> = {};
+    preview.rows.forEach((r) => {
+      const k = rowKey(r);
+      keys.add(k);
+      dates[k] = r.expires_on_earliest ?? '';
+    });
+    setSelectedKeys(keys);
+    setExpOverrides(dates);
+  }, [preview]);
+
+  const sortedRows = useMemo(() => {
+    if (!preview) return [];
+    const rows = [...preview.rows];
+    rows.sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case 'email': cmp = a.email.localeCompare(b.email); break;
+        case 'last4': cmp = (a.last4 ?? '').localeCompare(b.last4 ?? ''); break;
+        case 'db': cmp = a.db_total_remaining - b.db_total_remaining; break;
+        case 'shopify': cmp = a.shopify_balance - b.shopify_balance; break;
+        case 'diff': cmp = a.diff - b.diff; break;
+        case 'expires': cmp = (a.expires_on_earliest ?? '').localeCompare(b.expires_on_earliest ?? ''); break;
+      }
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return rows;
+  }, [preview, sortKey, sortDir]);
+
+  function toggleSort(col: SortKey) {
+    if (sortKey === col) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(col);
+      // Numeric columns default to desc (largest first); string columns default to asc.
+      setSortDir(col === 'email' || col === 'last4' || col === 'expires' ? 'asc' : 'desc');
+    }
+  }
+
+  function toggleRow(k: string) {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    if (!preview) return;
+    setSelectedKeys((prev) => {
+      if (prev.size === preview.rows.length) return new Set();
+      return new Set(preview.rows.map(rowKey));
+    });
+  }
+
+  function setExp(k: string, v: string) {
+    setExpOverrides((prev) => ({ ...prev, [k]: v }));
+  }
 
   async function runPreview() {
     setPreviewBusy(true);
@@ -88,6 +170,12 @@ export default function SyncShopifyBalancesPage() {
 
   async function runApply() {
     if (!preview) return;
+    const rowsToApply = preview.rows.filter((r) => selectedKeys.has(rowKey(r)));
+    if (rowsToApply.length === 0) {
+      setError('Select at least one row to apply.');
+      setConfirmOpen(false);
+      return;
+    }
     setApplyBusy(true);
     setError(null);
     setConfirmOpen(false);
@@ -96,14 +184,19 @@ export default function SyncShopifyBalancesPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          rows: preview.rows.map((r) => ({
-            customer_id: r.customer_id,
-            email: r.email,
-            shopify_gift_card_id: r.shopify_gift_card_id,
-            shopify_balance: r.shopify_balance,
-            db_total_remaining: r.db_total_remaining,
-            diff: r.diff,
-          })),
+          rows: rowsToApply.map((r) => {
+            const k = rowKey(r);
+            const exp = (expOverrides[k] ?? '').trim();
+            return {
+              customer_id: r.customer_id,
+              email: r.email,
+              shopify_gift_card_id: r.shopify_gift_card_id,
+              shopify_balance: r.shopify_balance,
+              db_total_remaining: r.db_total_remaining,
+              diff: r.diff,
+              expires_on: exp || null,
+            };
+          }),
         }),
       });
       const json = await res.json();
@@ -119,10 +212,20 @@ export default function SyncShopifyBalancesPage() {
     }
   }
 
-  const totalAbsDiff = useMemo(() => {
-    if (!preview) return 0;
-    return preview.rows.reduce((s, r) => s + Math.abs(r.diff), 0);
-  }, [preview]);
+  const selectedCount = selectedKeys.size;
+  const allSelected = preview && selectedCount === preview.rows.length;
+  const someSelected = selectedCount > 0 && !allSelected;
+
+  // Selected-only totals for the apply summary
+  const selectedTotals = useMemo(() => {
+    if (!preview) return { sub: 0, add: 0 };
+    let sub = 0, add = 0;
+    for (const r of preview.rows) {
+      if (!selectedKeys.has(rowKey(r))) continue;
+      if (r.diff < 0) sub += r.diff; else add += r.diff;
+    }
+    return { sub, add };
+  }, [preview, selectedKeys]);
 
   return (
     <main className="min-h-screen px-8 py-10 max-w-6xl mx-auto">
@@ -130,13 +233,14 @@ export default function SyncShopifyBalancesPage() {
       <h1 className="text-3xl font-bold mt-2 mb-1">Sync gift card balances from Shopify</h1>
       <p className="text-sm text-muted mb-2">
         Pull every gift card balance directly from Shopify, compare with our DB, and reconcile any drift.
-        This is a <strong>two-step</strong> process: preview shows discrepancies (read-only), then you click Apply to commit.
+        Two-step: preview shows discrepancies (read-only), then you select which rows to apply and click Apply to commit.
       </p>
       <p className="text-xs text-muted mb-6">
         On apply, Shopify becomes the source of truth: each grant&apos;s remaining_amount is adjusted so the customer&apos;s
         DB total for that gift card matches Shopify. Each touched grant gets a <code>type=adjust</code> ledger entry
         with description &quot;Shopify sync reconciliation — set to $X (was $Y)&quot;. When the diff is negative (DB &gt; Shopify),
         we debit the oldest-expiring grant first (FIFO). When positive, we credit the newest grant (longest expiration).
+        You can also override the expiration date per row — that updates all active grants for that gift card to the new date.
       </p>
 
       <section className="border border-line rounded-xl bg-white p-6 mb-6">
@@ -174,9 +278,9 @@ export default function SyncShopifyBalancesPage() {
               <Row label="Customers with a linked card" value={preview.customers_with_card.toLocaleString()} />
               <Row label="Customer–card pairs in sync" value={preview.in_sync_count.toLocaleString()} />
               <Row label="Discrepancies" value={preview.discrepancy_count.toLocaleString()} bold={preview.discrepancy_count > 0} />
-              <Row label="DB will DECREASE by" value={`$${Math.abs(preview.total_db_to_subtract).toFixed(2)}`} />
-              <Row label="DB will INCREASE by" value={`$${preview.total_db_to_add.toFixed(2)}`} />
-              <Row label="Net DB change" value={`$${(preview.total_db_to_add + preview.total_db_to_subtract).toFixed(2)}`} bold />
+              <Row label="DB will DECREASE by (all)" value={`$${Math.abs(preview.total_db_to_subtract).toFixed(2)}`} />
+              <Row label="DB will INCREASE by (all)" value={`$${preview.total_db_to_add.toFixed(2)}`} />
+              <Row label="Net DB change (all)" value={`$${(preview.total_db_to_add + preview.total_db_to_subtract).toFixed(2)}`} bold />
             </dl>
           </section>
 
@@ -187,41 +291,82 @@ export default function SyncShopifyBalancesPage() {
           ) : (
             <>
               <section className="border border-line rounded-xl bg-white p-0 mb-6 overflow-hidden">
-                <div className="px-6 py-4 border-b border-line">
-                  <h2 className="font-bold">Discrepancies ({preview.discrepancy_count})</h2>
-                  <p className="text-xs text-muted">
-                    Sorted by absolute diff descending. Sum of absolute diffs: ${totalAbsDiff.toFixed(2)}.
-                    Negative diff = DB had more than Shopify (will debit on apply).
-                  </p>
+                <div className="px-6 py-4 border-b border-line flex items-center justify-between">
+                  <div>
+                    <h2 className="font-bold">Discrepancies ({preview.discrepancy_count})</h2>
+                    <p className="text-xs text-muted">
+                      Click any header to sort. Negative diff = DB had more than Shopify (will debit on apply).
+                    </p>
+                  </div>
+                  <div className="text-sm">
+                    <strong>{selectedCount}</strong> of {preview.rows.length} selected
+                  </div>
                 </div>
                 <div className="overflow-auto max-h-[600px]">
                   <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-slate-50 border-b border-line">
+                    <thead className="sticky top-0 bg-slate-50 border-b border-line z-10">
                       <tr className="text-left text-muted">
-                        <th className="py-2 px-4 font-medium">Customer</th>
-                        <th className="py-2 px-4 font-medium">Card last4</th>
-                        <th className="py-2 px-4 font-medium text-right">DB has</th>
-                        <th className="py-2 px-4 font-medium text-right">Shopify says</th>
-                        <th className="py-2 px-4 font-medium text-right">Diff</th>
-                        <th className="py-2 px-4 font-medium text-right">Grants touched</th>
+                        <th className="py-2 px-3 font-medium w-10">
+                          <input
+                            type="checkbox"
+                            checked={!!allSelected}
+                            ref={(el) => { if (el) el.indeterminate = !!someSelected; }}
+                            onChange={toggleAll}
+                            title={allSelected ? 'Deselect all' : 'Select all'}
+                            className="cursor-pointer"
+                          />
+                        </th>
+                        <SortHeader col="email" label="Customer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                        <SortHeader col="last4" label="Card last4" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                        <SortHeader col="db" label="DB has" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                        <SortHeader col="shopify" label="Shopify says" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                        <SortHeader col="diff" label="Diff" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
+                        <SortHeader col="expires" label="Expires on" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                        <th className="py-2 px-3 font-medium text-right">Grants</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {preview.rows.map((r, i) => (
-                        <tr key={i} className="border-b border-line last:border-0">
-                          <td className="py-1.5 px-4">
-                            <Link href={`/customers/${r.customer_id}`} className="text-ink hover:underline text-xs">{r.email}</Link>
-                            {!r.shopify_enabled && <span className="ml-2 text-xs text-muted">(disabled)</span>}
-                          </td>
-                          <td className="py-1.5 px-4 font-mono text-xs">{r.last4 ?? '—'}</td>
-                          <td className="py-1.5 px-4 text-right font-mono text-xs">${r.db_total_remaining.toFixed(2)}</td>
-                          <td className="py-1.5 px-4 text-right font-mono text-xs font-semibold">${r.shopify_balance.toFixed(2)}</td>
-                          <td className={`py-1.5 px-4 text-right font-mono text-xs font-semibold ${r.diff < 0 ? 'text-bad' : 'text-emerald-700'}`}>
-                            {r.diff >= 0 ? '+' : ''}${r.diff.toFixed(2)}
-                          </td>
-                          <td className="py-1.5 px-4 text-right text-xs text-muted">{r.affected_grant_ids.length}</td>
-                        </tr>
-                      ))}
+                      {sortedRows.map((r) => {
+                        const k = rowKey(r);
+                        const isSelected = selectedKeys.has(k);
+                        const exp = expOverrides[k] ?? '';
+                        const dateChanged = !!exp && exp !== (r.expires_on_earliest ?? '');
+                        return (
+                          <tr
+                            key={k}
+                            className={`border-b border-line last:border-0 ${isSelected ? '' : 'opacity-50'}`}
+                          >
+                            <td className="py-1.5 px-3">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleRow(k)}
+                                className="cursor-pointer"
+                              />
+                            </td>
+                            <td className="py-1.5 px-3">
+                              <Link href={`/customers/${r.customer_id}`} className="text-ink hover:underline text-xs">{r.email}</Link>
+                              {!r.shopify_enabled && <span className="ml-2 text-xs text-muted">(disabled)</span>}
+                            </td>
+                            <td className="py-1.5 px-3 font-mono text-xs">{r.last4 ?? '—'}</td>
+                            <td className="py-1.5 px-3 text-right font-mono text-xs">${r.db_total_remaining.toFixed(2)}</td>
+                            <td className="py-1.5 px-3 text-right font-mono text-xs font-semibold">${r.shopify_balance.toFixed(2)}</td>
+                            <td className={`py-1.5 px-3 text-right font-mono text-xs font-semibold ${r.diff < 0 ? 'text-bad' : 'text-emerald-700'}`}>
+                              {r.diff >= 0 ? '+' : ''}${r.diff.toFixed(2)}
+                            </td>
+                            <td className="py-1.5 px-3">
+                              <input
+                                type="date"
+                                value={exp}
+                                onChange={(e) => setExp(k, e.target.value)}
+                                className={`text-xs border rounded px-1 py-0.5 ${dateChanged ? 'border-warn bg-yellow-50' : 'border-line'}`}
+                                title={dateChanged ? `Will update from ${r.expires_on_earliest ?? '(none)'}` : 'Earliest grant expiration on this card'}
+                              />
+                            </td>
+                            <td className="py-1.5 px-3 text-right text-xs text-muted">{r.affected_grant_ids.length}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -230,22 +375,24 @@ export default function SyncShopifyBalancesPage() {
               <section className="border border-warn rounded-xl bg-yellow-50 p-6 mb-6">
                 <h2 className="font-bold mb-2">Step 2 — Apply</h2>
                 <p className="text-sm mb-3">
-                  Click Apply to commit these {preview.discrepancy_count} adjustments. Each touched grant gets a ledger
-                  entry with description &quot;Shopify sync reconciliation&quot;. This is reversible only via manual ledger edits — proceed deliberately.
+                  Click Apply to commit <strong>{selectedCount}</strong> selected adjustment{selectedCount === 1 ? '' : 's'}.
+                  Each touched grant gets a ledger entry tagged &quot;Shopify sync reconciliation&quot;.
+                  Selected net DB change: <strong>${(selectedTotals.add + selectedTotals.sub).toFixed(2)}</strong>{' '}
+                  (-${Math.abs(selectedTotals.sub).toFixed(2)} / +${selectedTotals.add.toFixed(2)}).
                 </p>
                 {!confirmOpen ? (
                   <button
                     onClick={() => setConfirmOpen(true)}
-                    disabled={applyBusy}
+                    disabled={applyBusy || selectedCount === 0}
                     className="bg-ink text-white px-5 py-2 rounded-lg font-medium disabled:opacity-50"
                   >
-                    Apply {preview.discrepancy_count} adjustments
+                    Apply {selectedCount} adjustment{selectedCount === 1 ? '' : 's'}
                   </button>
                 ) : (
                   <div className="border border-bad bg-red-50 rounded-lg p-4">
                     <p className="text-sm mb-3">
-                      Confirm: apply <strong>{preview.discrepancy_count}</strong> reconciliation adjustments.
-                      Net DB change: <strong>${(preview.total_db_to_add + preview.total_db_to_subtract).toFixed(2)}</strong>.
+                      Confirm: apply <strong>{selectedCount}</strong> reconciliation adjustment{selectedCount === 1 ? '' : 's'}.
+                      Net DB change: <strong>${(selectedTotals.add + selectedTotals.sub).toFixed(2)}</strong>.
                     </p>
                     <div className="flex gap-2">
                       <button
@@ -325,6 +472,29 @@ export default function SyncShopifyBalancesPage() {
         </section>
       )}
     </main>
+  );
+}
+
+function SortHeader({
+  col, label, sortKey, sortDir, onSort, align = 'left',
+}: {
+  col: SortKey;
+  label: string;
+  sortKey: SortKey;
+  sortDir: SortDir;
+  onSort: (col: SortKey) => void;
+  align?: 'left' | 'right';
+}) {
+  const active = sortKey === col;
+  const arrow = active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
+  return (
+    <th
+      className={`py-2 px-3 font-medium select-none cursor-pointer hover:text-ink ${align === 'right' ? 'text-right' : ''}`}
+      onClick={() => onSort(col)}
+      title="Click to sort"
+    >
+      {label}{arrow}
+    </th>
   );
 }
 
