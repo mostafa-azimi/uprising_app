@@ -104,6 +104,7 @@ export default function SyncShopifyBalancesPage() {
   // Section B — Shopify > DB (review individually): one-by-one only
   // The string here is the row key; the second part says which mode is being confirmed
   const [confirmingB, setConfirmingB] = useState<{ key: string; mode: 'fix_db' | 'fix_shopify' } | null>(null);
+  const [bulkExpB, setBulkExpB] = useState<string>('');
   const [sortKeyB, setSortKeyB] = useState<SortKey>('diff');
   // Largest positive first
   const [sortDirB, setSortDirB] = useState<SortDir>('desc');
@@ -166,6 +167,21 @@ export default function SyncShopifyBalancesPage() {
     const date = expOverrides[fromKey];
     if (!date) return;
     applyExpToAllSelectedA(date);
+  }
+
+  // Section B has no row selection — fill-down applies to ALL Section B rows.
+  function applyExpToAllInB(date: string) {
+    if (!date || rowsB.length === 0) return;
+    setExpOverrides((prev) => {
+      const next = { ...prev };
+      rowsB.forEach((r) => { next[rowKey(r)] = date; });
+      return next;
+    });
+  }
+  function copyExpToAllInB(fromKey: string) {
+    const date = expOverrides[fromKey];
+    if (!date) return;
+    applyExpToAllInB(date);
   }
 
   function toggleSortA(col: SortKey) {
@@ -511,6 +527,24 @@ export default function SyncShopifyBalancesPage() {
                       Export {rowsB.length} to CSV
                     </button>
                   </div>
+                  <div className="px-6 py-3 bg-slate-50 border-b border-line flex items-center gap-3 flex-wrap text-sm">
+                    <span className="text-muted">Set expiration for all {rowsB.length} rows:</span>
+                    <input
+                      type="date"
+                      value={bulkExpB}
+                      onChange={(e) => setBulkExpB(e.target.value)}
+                      className="border border-line rounded px-2 py-1 text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => applyExpToAllInB(bulkExpB)}
+                      disabled={!bulkExpB}
+                      className="bg-ink text-white px-3 py-1 rounded text-xs font-medium disabled:opacity-50"
+                    >
+                      Apply to all
+                    </button>
+                    <span className="text-xs text-muted">· Or use ↓ on a row to copy that row&apos;s date to all rows</span>
+                  </div>
                   <div className="overflow-auto max-h-[500px]">
                     <table className="w-full text-sm">
                       <thead className="sticky top-0 bg-slate-50 border-b border-line z-10">
@@ -548,12 +582,23 @@ export default function SyncShopifyBalancesPage() {
                                 +${r.diff.toFixed(2)}
                               </td>
                               <td className="py-1.5 px-3">
-                                <input
-                                  type="date"
-                                  value={exp}
-                                  onChange={(e) => setExp(k, e.target.value)}
-                                  className={`text-xs border rounded px-1 py-0.5 ${dateChanged ? 'border-warn bg-yellow-50' : 'border-line'}`}
-                                />
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="date"
+                                    value={exp}
+                                    onChange={(e) => setExp(k, e.target.value)}
+                                    className={`text-xs border rounded px-1 py-0.5 ${dateChanged ? 'border-warn bg-yellow-50' : 'border-line'}`}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => copyExpToAllInB(k)}
+                                    disabled={!exp}
+                                    className="text-xs px-1.5 py-0.5 rounded border border-line text-muted hover:text-ink hover:border-ink disabled:opacity-30 disabled:cursor-not-allowed"
+                                    title={`Copy this date (${exp || 'none'}) to all ${rowsB.length} Section B rows`}
+                                  >
+                                    ↓
+                                  </button>
+                                </div>
                               </td>
                               <td className="py-1.5 px-3 text-right">
                                 {confirmHere === null ? (
