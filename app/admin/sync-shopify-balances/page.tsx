@@ -67,105 +67,112 @@ function rowKey(r: { customer_id: string; shopify_gift_card_id: string }): strin
   return `${r.customer_id}|${r.shopify_gift_card_id}`;
 }
 
+function sortRows(rows: DiscrepancyRow[], sortKey: SortKey, sortDir: SortDir): DiscrepancyRow[] {
+  const sorted = [...rows];
+  sorted.sort((a, b) => {
+    let cmp = 0;
+    switch (sortKey) {
+      case 'email': cmp = (a.customer_name ?? a.email).localeCompare(b.customer_name ?? b.email); break;
+      case 'last4': cmp = (a.last4 ?? '').localeCompare(b.last4 ?? ''); break;
+      case 'db': cmp = a.db_total_remaining - b.db_total_remaining; break;
+      case 'shopify': cmp = a.shopify_balance - b.shopify_balance; break;
+      case 'diff': cmp = a.diff - b.diff; break;
+      case 'expires': cmp = (a.expires_on_earliest ?? '').localeCompare(b.expires_on_earliest ?? ''); break;
+    }
+    return sortDir === 'asc' ? cmp : -cmp;
+  });
+  return sorted;
+}
+
 export default function SyncShopifyBalancesPage() {
   const [previewBusy, setPreviewBusy] = useState(false);
-  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyBusyA, setApplyBusyA] = useState(false);
+  const [applyBusyBKey, setApplyBusyBKey] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [confirmOpen, setConfirmOpen] = useState(false);
 
-  // Per-row selection (default: all selected after preview loads)
-  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
-  // Per-row expiration override (default: row's earliest existing expiration)
+  // Section A — DB > Shopify (debit DB to match): bulk-selectable
+  const [selectedKeysA, setSelectedKeysA] = useState<Set<string>>(new Set());
+  const [confirmAOpen, setConfirmAOpen] = useState(false);
+  const [sortKeyA, setSortKeyA] = useState<SortKey>('diff');
+  // Most-negative first so largest debits show on top
+  const [sortDirA, setSortDirA] = useState<SortDir>('asc');
+  const [bulkExpA, setBulkExpA] = useState<string>('');
+
+  // Section B — Shopify > DB (review individually): one-by-one only
+  const [confirmingKeyB, setConfirmingKeyB] = useState<string | null>(null);
+  const [sortKeyB, setSortKeyB] = useState<SortKey>('diff');
+  // Largest positive first
+  const [sortDirB, setSortDirB] = useState<SortDir>('desc');
+
+  // Per-row expiration override (used by both sections)
   const [expOverrides, setExpOverrides] = useState<Record<string, string>>({});
-  // Bulk date input for "Set expiration for all selected"
-  const [bulkExp, setBulkExp] = useState<string>('');
-  // Sort state
-  const [sortKey, setSortKey] = useState<SortKey>('diff');
-  const [sortDir, setSortDir] = useState<SortDir>('desc');
 
-  // When a fresh preview lands, default-select all rows and seed expiration inputs
+  // Split preview rows into the two sections
+  const rowsA = useMemo(() => (preview?.rows ?? []).filter((r) => r.diff < 0), [preview]);
+  const rowsB = useMemo(() => (preview?.rows ?? []).filter((r) => r.diff > 0), [preview]);
+  const sortedA = useMemo(() => sortRows(rowsA, sortKeyA, sortDirA), [rowsA, sortKeyA, sortDirA]);
+  const sortedB = useMemo(() => sortRows(rowsB, sortKeyB, sortDirB), [rowsB, sortKeyB, sortDirB]);
+
+  // When a fresh preview lands: default-select all of Section A, none of Section B,
+  // and seed each row's expiration input with the existing earliest_expires_on
   useEffect(() => {
     if (!preview) {
-      setSelectedKeys(new Set());
+      setSelectedKeysA(new Set());
+      setConfirmingKeyB(null);
       setExpOverrides({});
       return;
     }
-    const keys = new Set<string>();
+    const aKeys = new Set<string>();
     const dates: Record<string, string> = {};
     preview.rows.forEach((r) => {
       const k = rowKey(r);
-      keys.add(k);
       dates[k] = r.expires_on_earliest ?? '';
+      if (r.diff < 0) aKeys.add(k);
     });
-    setSelectedKeys(keys);
+    setSelectedKeysA(aKeys);
     setExpOverrides(dates);
   }, [preview]);
 
-  const sortedRows = useMemo(() => {
-    if (!preview) return [];
-    const rows = [...preview.rows];
-    rows.sort((a, b) => {
-      let cmp = 0;
-      switch (sortKey) {
-        case 'email': cmp = (a.customer_name ?? a.email).localeCompare(b.customer_name ?? b.email); break;
-        case 'last4': cmp = (a.last4 ?? '').localeCompare(b.last4 ?? ''); break;
-        case 'db': cmp = a.db_total_remaining - b.db_total_remaining; break;
-        case 'shopify': cmp = a.shopify_balance - b.shopify_balance; break;
-        case 'diff': cmp = a.diff - b.diff; break;
-        case 'expires': cmp = (a.expires_on_earliest ?? '').localeCompare(b.expires_on_earliest ?? ''); break;
-      }
-      return sortDir === 'asc' ? cmp : -cmp;
-    });
-    return rows;
-  }, [preview, sortKey, sortDir]);
-
-  function toggleSort(col: SortKey) {
-    if (sortKey === col) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortKey(col);
-      // Numeric columns default to desc (largest first); string columns default to asc.
-      setSortDir(col === 'email' || col === 'last4' || col === 'expires' ? 'asc' : 'desc');
-    }
-  }
-
-  function toggleRow(k: string) {
-    setSelectedKeys((prev) => {
+  function toggleRowA(k: string) {
+    setSelectedKeysA((prev) => {
       const next = new Set(prev);
       if (next.has(k)) next.delete(k); else next.add(k);
       return next;
     });
   }
-
-  function toggleAll() {
-    if (!preview) return;
-    setSelectedKeys((prev) => {
-      if (prev.size === preview.rows.length) return new Set();
-      return new Set(preview.rows.map(rowKey));
+  function toggleAllA() {
+    setSelectedKeysA((prev) => {
+      if (prev.size === rowsA.length) return new Set();
+      return new Set(rowsA.map(rowKey));
     });
   }
 
   function setExp(k: string, v: string) {
     setExpOverrides((prev) => ({ ...prev, [k]: v }));
   }
-
-  // Bulk-set: apply a date to every currently-selected row
-  function applyExpToAllSelected(date: string) {
-    if (!date || selectedKeys.size === 0) return;
+  function applyExpToAllSelectedA(date: string) {
+    if (!date || selectedKeysA.size === 0) return;
     setExpOverrides((prev) => {
       const next = { ...prev };
-      selectedKeys.forEach((k) => { next[k] = date; });
+      selectedKeysA.forEach((k) => { next[k] = date; });
       return next;
     });
   }
-
-  // Per-row "fill down": copy one row's date to every selected row
-  function copyExpToAllSelected(fromKey: string) {
+  function copyExpToAllSelectedA(fromKey: string) {
     const date = expOverrides[fromKey];
     if (!date) return;
-    applyExpToAllSelected(date);
+    applyExpToAllSelectedA(date);
+  }
+
+  function toggleSortA(col: SortKey) {
+    if (sortKeyA === col) setSortDirA((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKeyA(col); setSortDirA(col === 'email' || col === 'last4' || col === 'expires' ? 'asc' : 'asc'); }
+  }
+  function toggleSortB(col: SortKey) {
+    if (sortKeyB === col) setSortDirB((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKeyB(col); setSortDirB(col === 'email' || col === 'last4' || col === 'expires' ? 'asc' : 'desc'); }
   }
 
   async function runPreview() {
@@ -188,36 +195,34 @@ export default function SyncShopifyBalancesPage() {
     }
   }
 
-  async function runApply() {
-    if (!preview) return;
-    const rowsToApply = preview.rows.filter((r) => selectedKeys.has(rowKey(r)));
-    if (rowsToApply.length === 0) {
-      setError('Select at least one row to apply.');
-      setConfirmOpen(false);
+  function payloadFor(rows: DiscrepancyRow[]) {
+    return rows.map((r) => {
+      const k = rowKey(r);
+      const exp = (expOverrides[k] ?? '').trim();
+      return {
+        customer_id: r.customer_id,
+        email: r.email,
+        shopify_gift_card_id: r.shopify_gift_card_id,
+        shopify_balance: r.shopify_balance,
+        db_total_remaining: r.db_total_remaining,
+        diff: r.diff,
+        expires_on: exp || null,
+      };
+    });
+  }
+
+  async function runApply(rows: DiscrepancyRow[], busySetter: (b: boolean) => void) {
+    if (rows.length === 0) {
+      setError('Nothing to apply.');
       return;
     }
-    setApplyBusy(true);
+    busySetter(true);
     setError(null);
-    setConfirmOpen(false);
     try {
       const res = await fetch('/api/admin/sync-shopify-balances/apply', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          rows: rowsToApply.map((r) => {
-            const k = rowKey(r);
-            const exp = (expOverrides[k] ?? '').trim();
-            return {
-              customer_id: r.customer_id,
-              email: r.email,
-              shopify_gift_card_id: r.shopify_gift_card_id,
-              shopify_balance: r.shopify_balance,
-              db_total_remaining: r.db_total_remaining,
-              diff: r.diff,
-              expires_on: exp || null,
-            };
-          }),
-        }),
+        body: JSON.stringify({ rows: payloadFor(rows) }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -228,58 +233,94 @@ export default function SyncShopifyBalancesPage() {
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setApplyBusy(false);
+      busySetter(false);
     }
   }
 
-  const selectedCount = selectedKeys.size;
-  const allSelected = preview && selectedCount === preview.rows.length;
-  const someSelected = selectedCount > 0 && !allSelected;
+  async function runApplyA() {
+    setConfirmAOpen(false);
+    const toApply = rowsA.filter((r) => selectedKeysA.has(rowKey(r)));
+    await runApply(toApply, setApplyBusyA);
+  }
 
-  // Selected-only totals for the apply summary
-  const selectedTotals = useMemo(() => {
-    if (!preview) return { sub: 0, add: 0 };
-    let sub = 0, add = 0;
-    for (const r of preview.rows) {
-      if (!selectedKeys.has(rowKey(r))) continue;
-      if (r.diff < 0) sub += r.diff; else add += r.diff;
+  async function runApplyOneB(row: DiscrepancyRow) {
+    const k = rowKey(row);
+    setConfirmingKeyB(null);
+    setApplyBusyBKey(k);
+    try {
+      await runApply([row], () => {});
+    } finally {
+      setApplyBusyBKey(null);
     }
-    return { sub, add };
-  }, [preview, selectedKeys]);
+  }
+
+  function exportBToCsv() {
+    if (rowsB.length === 0) return;
+    const header = 'email,customer_id,app_balance,shopify_balance,diff,last4';
+    const lines = rowsB.map((r) =>
+      [
+        r.email,
+        r.customer_id,
+        r.db_total_remaining.toFixed(2),
+        r.shopify_balance.toFixed(2),
+        r.diff.toFixed(2),
+        r.last4 ?? '',
+      ]
+        .map((v) => (typeof v === 'string' && v.includes(',') ? `"${v}"` : v))
+        .join(',')
+    );
+    const csv = [header, ...lines].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `shopify-greater-than-db-${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  const aSelectedCount = selectedKeysA.size;
+  const allASelected = rowsA.length > 0 && aSelectedCount === rowsA.length;
+  const someASelected = aSelectedCount > 0 && !allASelected;
+
+  const aSelectedTotal = useMemo(() => {
+    let total = 0;
+    for (const r of rowsA) {
+      if (selectedKeysA.has(rowKey(r))) total += r.diff; // diff is negative
+    }
+    return total;
+  }, [rowsA, selectedKeysA]);
 
   return (
     <main className="min-h-screen px-8 py-10 max-w-6xl mx-auto">
       <Link href="/tools" className="text-sm text-muted hover:text-ink">← Tools</Link>
       <h1 className="text-3xl font-bold mt-2 mb-1">Sync gift card balances from Shopify</h1>
       <p className="text-sm text-muted mb-2">
-        Pull every gift card balance directly from Shopify, compare with our DB, and reconcile any drift.
-        Two-step: preview shows discrepancies (read-only), then you select which rows to apply and click Apply to commit.
+        Reconcile our DB with Shopify. The tool surfaces drift in two separate tables so each direction
+        is handled deliberately.
       </p>
       <p className="text-xs text-muted mb-6">
-        On apply, Shopify becomes the source of truth: each grant&apos;s remaining_amount is adjusted so the customer&apos;s
-        DB total for that gift card matches Shopify. Each touched grant gets a <code>type=adjust</code> ledger entry
-        with description &quot;Shopify sync reconciliation — set to $X (was $Y)&quot;. When the diff is negative (DB &gt; Shopify),
-        we debit the oldest-expiring grant first (FIFO). When positive, we credit the newest grant (longest expiration).
-        You can also override the expiration date per row — that updates all active grants for that gift card to the new date.
+        <strong>Section A (DB &gt; Shopify):</strong> customer redeemed in Shopify but our app missed it.
+        Apply debits the DB to match.{' '}
+        <strong>Section B (Shopify &gt; DB):</strong> Shopify has more credit than our DB knows about.
+        Review one-by-one — applying credits the DB to match Shopify; if instead you need to debit Shopify,
+        do that manually in Shopify admin.
       </p>
 
       <section className="border border-line rounded-xl bg-white p-6 mb-6">
         <h2 className="font-semibold mb-2">Step 1 — Preview</h2>
         <p className="text-sm text-muted mb-4">
-          Pulls all gift cards from Shopify, sums each customer&apos;s grants per card, and shows any discrepancies. No DB writes.
+          Pulls all gift cards from Shopify and compares to our DB at the customer level. No DB writes.
         </p>
         <button
           onClick={runPreview}
-          disabled={previewBusy || applyBusy}
+          disabled={previewBusy || applyBusyA || !!applyBusyBKey}
           className="bg-ink text-white px-5 py-2 rounded-lg font-medium disabled:opacity-50"
         >
           {previewBusy ? 'Pulling from Shopify…' : 'Run preview'}
         </button>
-        {previewBusy && (
-          <p className="text-xs text-muted mt-2">
-            Pages through Shopify gift cards and grants in our DB. Can take 30–60s for ~6500 cards.
-          </p>
-        )}
       </section>
 
       {error && (
@@ -296,196 +337,270 @@ export default function SyncShopifyBalancesPage() {
             <dl className="grid grid-cols-2 gap-2 text-sm">
               <Row label="Shopify cards total" value={preview.shopify_cards_total.toLocaleString()} />
               <Row label="Customers with a linked card" value={preview.customers_with_card.toLocaleString()} />
-              <Row label="Customer–card pairs in sync" value={preview.in_sync_count.toLocaleString()} />
-              <Row label="Discrepancies" value={preview.discrepancy_count.toLocaleString()} bold={preview.discrepancy_count > 0} />
-              <Row label="DB will DECREASE by (all)" value={`$${Math.abs(preview.total_db_to_subtract).toFixed(2)}`} />
-              <Row label="DB will INCREASE by (all)" value={`$${preview.total_db_to_add.toFixed(2)}`} />
-              <Row label="Net DB change (all)" value={`$${(preview.total_db_to_add + preview.total_db_to_subtract).toFixed(2)}`} bold />
+              <Row label="In sync" value={preview.in_sync_count.toLocaleString()} />
+              <Row label="Section A — DB > Shopify" value={`${rowsA.length} customers · $${Math.abs(rowsA.reduce((s, r) => s + r.diff, 0)).toFixed(2)}`} bold={rowsA.length > 0} />
+              <Row label="Section B — Shopify > DB" value={`${rowsB.length} customers · $${rowsB.reduce((s, r) => s + r.diff, 0).toFixed(2)}`} bold={rowsB.length > 0} />
             </dl>
           </section>
 
-          {preview.discrepancy_count === 0 ? (
+          {rowsA.length === 0 && rowsB.length === 0 ? (
             <div className="p-6 rounded-xl border border-emerald-200 bg-emerald-50 text-sm">
-              <strong className="text-emerald-800">All in sync.</strong> Every customer&apos;s DB total matches Shopify&apos;s current balance for their gift card. Nothing to apply.
+              <strong className="text-emerald-800">All in sync.</strong> Every customer&apos;s DB total matches Shopify&apos;s current balance. Nothing to apply.
             </div>
           ) : (
             <>
-              <section className="border border-line rounded-xl bg-white p-0 mb-6 overflow-hidden">
-                <div className="px-6 py-4 border-b border-line flex items-center justify-between flex-wrap gap-3">
-                  <div>
-                    <h2 className="font-bold">Discrepancies ({preview.discrepancy_count})</h2>
-                    <p className="text-xs text-muted">
-                      Click any header to sort. Negative diff = DB had more than Shopify (will debit on apply).
+              {/* SECTION A: DB > Shopify (debit DB) */}
+              {rowsA.length > 0 && (
+                <section className="border border-bad rounded-xl bg-white p-0 mb-8 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-line bg-red-50">
+                    <h2 className="font-bold text-bad">Section A — DB has more than Shopify ({rowsA.length})</h2>
+                    <p className="text-xs text-muted mt-1">
+                      The customer&apos;s gift card has been redeemed in Shopify but our DB still shows the higher balance.
+                      Apply debits the DB grants to match Shopify. Bulk-applicable.
                     </p>
                   </div>
-                  <div className="text-sm">
-                    <strong>{selectedCount}</strong> of {preview.rows.length} selected
+                  <div className="px-6 py-3 bg-slate-50 border-b border-line flex items-center gap-3 flex-wrap text-sm">
+                    <span className="text-muted">Set expiration for all selected:</span>
+                    <input
+                      type="date"
+                      value={bulkExpA}
+                      onChange={(e) => setBulkExpA(e.target.value)}
+                      className="border border-line rounded px-2 py-1 text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => applyExpToAllSelectedA(bulkExpA)}
+                      disabled={!bulkExpA || aSelectedCount === 0}
+                      className="bg-ink text-white px-3 py-1 rounded text-xs font-medium disabled:opacity-50"
+                    >
+                      Apply to {aSelectedCount} selected
+                    </button>
+                    <span className="text-xs text-muted">· Or use ↓ on a row to copy that row&apos;s date down</span>
+                    <span className="ml-auto text-sm">
+                      <strong>{aSelectedCount}</strong> of {rowsA.length} selected
+                    </span>
                   </div>
-                </div>
-                <div className="px-6 py-3 bg-slate-50 border-b border-line flex items-center gap-3 flex-wrap text-sm">
-                  <span className="text-muted">Set expiration for all selected:</span>
-                  <input
-                    type="date"
-                    value={bulkExp}
-                    onChange={(e) => setBulkExp(e.target.value)}
-                    className="border border-line rounded px-2 py-1 text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => applyExpToAllSelected(bulkExp)}
-                    disabled={!bulkExp || selectedCount === 0}
-                    className="bg-ink text-white px-3 py-1 rounded text-xs font-medium disabled:opacity-50"
-                    title="Set this date on every selected row"
-                  >
-                    Apply to {selectedCount} selected
-                  </button>
-                  <span className="text-xs text-muted">
-                    · Or use the <strong>↓</strong> button on any row to copy that row&apos;s date down to all selected.
-                  </span>
-                </div>
-                <div className="overflow-auto max-h-[600px]">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0 bg-slate-50 border-b border-line z-10">
-                      <tr className="text-left text-muted">
-                        <th className="py-2 px-3 font-medium w-10">
-                          <input
-                            type="checkbox"
-                            checked={!!allSelected}
-                            ref={(el) => { if (el) el.indeterminate = !!someSelected; }}
-                            onChange={toggleAll}
-                            title={allSelected ? 'Deselect all' : 'Select all'}
-                            className="cursor-pointer"
-                          />
-                        </th>
-                        <SortHeader col="email" label="Customer" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                        <SortHeader col="last4" label="Card last4" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                        <SortHeader col="db" label="DB has" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-                        <SortHeader col="shopify" label="Shopify says" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-                        <SortHeader col="diff" label="Diff" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} align="right" />
-                        <SortHeader col="expires" label="Expires on" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-                        <th className="py-2 px-3 font-medium text-right">Grants</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortedRows.map((r) => {
-                        const k = rowKey(r);
-                        const isSelected = selectedKeys.has(k);
-                        const exp = expOverrides[k] ?? '';
-                        const dateChanged = !!exp && exp !== (r.expires_on_earliest ?? '');
-                        return (
-                          <tr
-                            key={k}
-                            className={`border-b border-line last:border-0 ${isSelected ? '' : 'opacity-50'}`}
+                  <div className="overflow-auto max-h-[500px]">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-slate-50 border-b border-line z-10">
+                        <tr className="text-left text-muted">
+                          <th className="py-2 px-3 font-medium w-10">
+                            <input
+                              type="checkbox"
+                              checked={allASelected}
+                              ref={(el) => { if (el) el.indeterminate = someASelected; }}
+                              onChange={toggleAllA}
+                              className="cursor-pointer"
+                            />
+                          </th>
+                          <SortHeader col="email" label="Customer" sortKey={sortKeyA} sortDir={sortDirA} onSort={toggleSortA} />
+                          <SortHeader col="last4" label="Card last4" sortKey={sortKeyA} sortDir={sortDirA} onSort={toggleSortA} />
+                          <SortHeader col="db" label="DB has" sortKey={sortKeyA} sortDir={sortDirA} onSort={toggleSortA} align="right" />
+                          <SortHeader col="shopify" label="Shopify says" sortKey={sortKeyA} sortDir={sortDirA} onSort={toggleSortA} align="right" />
+                          <SortHeader col="diff" label="Diff" sortKey={sortKeyA} sortDir={sortDirA} onSort={toggleSortA} align="right" />
+                          <SortHeader col="expires" label="Expires on" sortKey={sortKeyA} sortDir={sortDirA} onSort={toggleSortA} />
+                          <th className="py-2 px-3 font-medium text-right">Grants</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedA.map((r) => {
+                          const k = rowKey(r);
+                          const isSelected = selectedKeysA.has(k);
+                          const exp = expOverrides[k] ?? '';
+                          const dateChanged = !!exp && exp !== (r.expires_on_earliest ?? '');
+                          return (
+                            <tr key={k} className={`border-b border-line last:border-0 ${isSelected ? '' : 'opacity-50'}`}>
+                              <td className="py-1.5 px-3">
+                                <input type="checkbox" checked={isSelected} onChange={() => toggleRowA(k)} className="cursor-pointer" />
+                              </td>
+                              <td className="py-1.5 px-3">
+                                <Link href={`/customers/${r.customer_id}`} className="text-ink hover:underline text-xs">
+                                  {r.customer_name ? r.customer_name : r.email}
+                                </Link>
+                                {r.customer_name && <div className="text-[11px] text-muted">{r.email}</div>}
+                                {!r.shopify_enabled && <span className="ml-2 text-xs text-muted">(disabled)</span>}
+                              </td>
+                              <td className="py-1.5 px-3 font-mono text-xs">{r.last4 ?? '—'}</td>
+                              <td className="py-1.5 px-3 text-right font-mono text-xs">${r.db_total_remaining.toFixed(2)}</td>
+                              <td className="py-1.5 px-3 text-right font-mono text-xs font-semibold">${r.shopify_balance.toFixed(2)}</td>
+                              <td className="py-1.5 px-3 text-right font-mono text-xs font-semibold text-bad">
+                                ${r.diff.toFixed(2)}
+                              </td>
+                              <td className="py-1.5 px-3">
+                                <div className="flex items-center gap-1">
+                                  <input
+                                    type="date"
+                                    value={exp}
+                                    onChange={(e) => setExp(k, e.target.value)}
+                                    className={`text-xs border rounded px-1 py-0.5 ${dateChanged ? 'border-warn bg-yellow-50' : 'border-line'}`}
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => copyExpToAllSelectedA(k)}
+                                    disabled={!exp || aSelectedCount === 0}
+                                    className="text-xs px-1.5 py-0.5 rounded border border-line text-muted hover:text-ink hover:border-ink disabled:opacity-30 disabled:cursor-not-allowed"
+                                    title="Copy this date to all selected rows"
+                                  >
+                                    ↓
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="py-1.5 px-3 text-right text-xs text-muted">{r.affected_grant_ids.length}</td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="px-6 py-4 border-t border-line bg-red-50">
+                    {!confirmAOpen ? (
+                      <button
+                        onClick={() => setConfirmAOpen(true)}
+                        disabled={applyBusyA || aSelectedCount === 0}
+                        className="bg-bad text-white px-5 py-2 rounded-lg font-medium disabled:opacity-50"
+                      >
+                        Apply {aSelectedCount} debit{aSelectedCount === 1 ? '' : 's'} to DB (${aSelectedTotal.toFixed(2)})
+                      </button>
+                    ) : (
+                      <div>
+                        <p className="text-sm mb-3">
+                          Confirm: apply <strong>{aSelectedCount}</strong> debit{aSelectedCount === 1 ? '' : 's'} totaling <strong>${aSelectedTotal.toFixed(2)}</strong>.
+                          Each touched grant gets a &quot;Shopify sync reconciliation&quot; ledger entry.
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={runApplyA}
+                            disabled={applyBusyA}
+                            className="bg-bad text-white px-5 py-2 rounded-lg font-medium disabled:opacity-50"
                           >
-                            <td className="py-1.5 px-3">
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => toggleRow(k)}
-                                className="cursor-pointer"
-                              />
-                            </td>
-                            <td className="py-1.5 px-3">
-                              <Link href={`/customers/${r.customer_id}`} className="text-ink hover:underline text-xs">
-                                {r.customer_name ? r.customer_name : r.email}
-                              </Link>
-                              {r.customer_name && (
-                                <div className="text-[11px] text-muted">{r.email}</div>
-                              )}
-                              {!r.shopify_enabled && <span className="ml-2 text-xs text-muted">(disabled)</span>}
-                            </td>
-                            <td className="py-1.5 px-3 font-mono text-xs">{r.last4 ?? '—'}</td>
-                            <td className="py-1.5 px-3 text-right font-mono text-xs">${r.db_total_remaining.toFixed(2)}</td>
-                            <td className="py-1.5 px-3 text-right font-mono text-xs font-semibold">${r.shopify_balance.toFixed(2)}</td>
-                            <td className={`py-1.5 px-3 text-right font-mono text-xs font-semibold ${r.diff < 0 ? 'text-bad' : 'text-emerald-700'}`}>
-                              {r.diff >= 0 ? '+' : ''}${r.diff.toFixed(2)}
-                            </td>
-                            <td className="py-1.5 px-3">
-                              <div className="flex items-center gap-1">
+                            {applyBusyA ? 'Applying…' : 'Yes, apply now'}
+                          </button>
+                          <button
+                            onClick={() => setConfirmAOpen(false)}
+                            disabled={applyBusyA}
+                            className="bg-white border border-line px-5 py-2 rounded-lg font-medium"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              )}
+
+              {/* SECTION B: Shopify > DB (review individually) */}
+              {rowsB.length > 0 && (
+                <section className="border border-warn rounded-xl bg-white p-0 mb-8 overflow-hidden">
+                  <div className="px-6 py-4 border-b border-line bg-yellow-50 flex items-start justify-between flex-wrap gap-3">
+                    <div>
+                      <h2 className="font-bold text-amber-800">Section B — Shopify has more than DB ({rowsB.length})</h2>
+                      <p className="text-xs text-muted mt-1">
+                        Investigate each one. Apply credits the DB to match Shopify (use only when Shopify is the truth).
+                        Otherwise debit Shopify in admin or export for later. <strong>One row at a time — no bulk apply.</strong>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={exportBToCsv}
+                      className="bg-white border border-line px-3 py-1.5 rounded-lg text-xs font-medium hover:border-ink"
+                    >
+                      Export {rowsB.length} to CSV
+                    </button>
+                  </div>
+                  <div className="overflow-auto max-h-[500px]">
+                    <table className="w-full text-sm">
+                      <thead className="sticky top-0 bg-slate-50 border-b border-line z-10">
+                        <tr className="text-left text-muted">
+                          <SortHeader col="email" label="Customer" sortKey={sortKeyB} sortDir={sortDirB} onSort={toggleSortB} />
+                          <SortHeader col="last4" label="Card last4" sortKey={sortKeyB} sortDir={sortDirB} onSort={toggleSortB} />
+                          <SortHeader col="db" label="DB has" sortKey={sortKeyB} sortDir={sortDirB} onSort={toggleSortB} align="right" />
+                          <SortHeader col="shopify" label="Shopify says" sortKey={sortKeyB} sortDir={sortDirB} onSort={toggleSortB} align="right" />
+                          <SortHeader col="diff" label="Diff" sortKey={sortKeyB} sortDir={sortDirB} onSort={toggleSortB} align="right" />
+                          <SortHeader col="expires" label="Expires on" sortKey={sortKeyB} sortDir={sortDirB} onSort={toggleSortB} />
+                          <th className="py-2 px-3 font-medium text-right">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedB.map((r) => {
+                          const k = rowKey(r);
+                          const isConfirming = confirmingKeyB === k;
+                          const isApplying = applyBusyBKey === k;
+                          const exp = expOverrides[k] ?? '';
+                          const dateChanged = !!exp && exp !== (r.expires_on_earliest ?? '');
+                          return (
+                            <tr key={k} className="border-b border-line last:border-0">
+                              <td className="py-1.5 px-3">
+                                <Link href={`/customers/${r.customer_id}`} className="text-ink hover:underline text-xs">
+                                  {r.customer_name ? r.customer_name : r.email}
+                                </Link>
+                                {r.customer_name && <div className="text-[11px] text-muted">{r.email}</div>}
+                                {!r.shopify_enabled && <span className="ml-2 text-xs text-muted">(disabled)</span>}
+                              </td>
+                              <td className="py-1.5 px-3 font-mono text-xs">{r.last4 ?? '—'}</td>
+                              <td className="py-1.5 px-3 text-right font-mono text-xs">${r.db_total_remaining.toFixed(2)}</td>
+                              <td className="py-1.5 px-3 text-right font-mono text-xs font-semibold">${r.shopify_balance.toFixed(2)}</td>
+                              <td className="py-1.5 px-3 text-right font-mono text-xs font-semibold text-emerald-700">
+                                +${r.diff.toFixed(2)}
+                              </td>
+                              <td className="py-1.5 px-3">
                                 <input
                                   type="date"
                                   value={exp}
                                   onChange={(e) => setExp(k, e.target.value)}
                                   className={`text-xs border rounded px-1 py-0.5 ${dateChanged ? 'border-warn bg-yellow-50' : 'border-line'}`}
-                                  title={dateChanged ? `Will update from ${r.expires_on_earliest ?? '(none)'}` : 'Earliest grant expiration on this card'}
                                 />
-                                <button
-                                  type="button"
-                                  onClick={() => copyExpToAllSelected(k)}
-                                  disabled={!exp || selectedCount === 0}
-                                  className="text-xs px-1.5 py-0.5 rounded border border-line text-muted hover:text-ink hover:border-ink disabled:opacity-30 disabled:cursor-not-allowed"
-                                  title={`Copy this date (${exp || 'none'}) to all ${selectedCount} selected rows`}
-                                >
-                                  ↓
-                                </button>
-                              </div>
-                            </td>
-                            <td className="py-1.5 px-3 text-right text-xs text-muted">{r.affected_grant_ids.length}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-
-              <section className="border border-warn rounded-xl bg-yellow-50 p-6 mb-6">
-                <h2 className="font-bold mb-2">Step 2 — Apply</h2>
-                <p className="text-sm mb-3">
-                  Click Apply to commit <strong>{selectedCount}</strong> selected adjustment{selectedCount === 1 ? '' : 's'}.
-                  Each touched grant gets a ledger entry tagged &quot;Shopify sync reconciliation&quot;.
-                  Selected net DB change: <strong>${(selectedTotals.add + selectedTotals.sub).toFixed(2)}</strong>{' '}
-                  (-${Math.abs(selectedTotals.sub).toFixed(2)} / +${selectedTotals.add.toFixed(2)}).
-                </p>
-                {!confirmOpen ? (
-                  <button
-                    onClick={() => setConfirmOpen(true)}
-                    disabled={applyBusy || selectedCount === 0}
-                    className="bg-ink text-white px-5 py-2 rounded-lg font-medium disabled:opacity-50"
-                  >
-                    Apply {selectedCount} adjustment{selectedCount === 1 ? '' : 's'}
-                  </button>
-                ) : (
-                  <div className="border border-bad bg-red-50 rounded-lg p-4">
-                    <p className="text-sm mb-3">
-                      Confirm: apply <strong>{selectedCount}</strong> reconciliation adjustment{selectedCount === 1 ? '' : 's'}.
-                      Net DB change: <strong>${(selectedTotals.add + selectedTotals.sub).toFixed(2)}</strong>.
-                    </p>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={runApply}
-                        disabled={applyBusy}
-                        className="bg-bad text-white px-5 py-2 rounded-lg font-medium disabled:opacity-50"
-                      >
-                        {applyBusy ? 'Applying…' : 'Yes, apply now'}
-                      </button>
-                      <button
-                        onClick={() => setConfirmOpen(false)}
-                        disabled={applyBusy}
-                        className="bg-white border border-line px-5 py-2 rounded-lg font-medium"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                    {applyBusy && (
-                      <p className="text-xs text-muted mt-3">
-                        Updating grants, writing ledger entries, recomputing balances, pushing to Klaviyo. Don&apos;t close this tab.
-                      </p>
-                    )}
+                              </td>
+                              <td className="py-1.5 px-3 text-right">
+                                {!isConfirming ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setConfirmingKeyB(k)}
+                                    disabled={!!applyBusyBKey || applyBusyA}
+                                    className="bg-amber-600 text-white px-3 py-1 rounded text-xs font-medium disabled:opacity-50"
+                                  >
+                                    Apply (+${r.diff.toFixed(2)})
+                                  </button>
+                                ) : (
+                                  <div className="flex gap-1 justify-end">
+                                    <button
+                                      type="button"
+                                      onClick={() => runApplyOneB(r)}
+                                      disabled={isApplying}
+                                      className="bg-bad text-white px-2 py-1 rounded text-xs font-medium disabled:opacity-50"
+                                    >
+                                      {isApplying ? '…' : 'Confirm'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setConfirmingKeyB(null)}
+                                      disabled={isApplying}
+                                      className="bg-white border border-line px-2 py-1 rounded text-xs font-medium"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
-                )}
-              </section>
+                </section>
+              )}
             </>
           )}
 
           {preview.unmatched_shopify_card_ids_sample.length > 0 && (
             <details className="border border-line rounded-xl bg-white p-4 mb-6">
               <summary className="cursor-pointer font-semibold">
-                Shopify cards with no matching grant in our DB (sample of {preview.unmatched_shopify_card_ids_sample.length})
+                Shopify cards with no matching customer in our DB (sample of {preview.unmatched_shopify_card_ids_sample.length})
               </summary>
               <p className="text-xs text-muted mt-2 mb-2">
-                These Shopify cards exist but aren&apos;t linked to any grant in Uprising. They&apos;re ignored by this tool.
-                If they should be linked, run <Link href="/admin/link-gift-cards" className="text-ink hover:underline">Link gift cards</Link>.
+                These Shopify cards exist but aren&apos;t linked to any customer in Uprising.
+                If they should be linked, run <Link href="/admin/link-by-code" className="text-ink hover:underline">Link gift cards by code</Link>.
               </p>
               <pre className="text-xs bg-slate-50 border border-line rounded-lg p-3 overflow-auto max-h-64">
                 {preview.unmatched_shopify_card_ids_sample.join('\n')}
@@ -511,7 +626,6 @@ export default function SyncShopifyBalancesPage() {
             <Row label="Klaviyo pushed" value={applyResult.klaviyo_pushed.toLocaleString()} />
             <Row label="Klaviyo errors" value={applyResult.klaviyo_errors.toLocaleString()} />
           </dl>
-
           {(applyResult.rows_stale > 0 || applyResult.rows_errored > 0) && (
             <details className="mt-4 bg-white border border-line rounded-lg p-3">
               <summary className="cursor-pointer text-sm font-semibold">Issues ({applyResult.rows_stale + applyResult.rows_errored})</summary>
@@ -526,6 +640,9 @@ export default function SyncShopifyBalancesPage() {
               </ul>
             </details>
           )}
+          <p className="text-xs text-muted mt-3">
+            Run preview again to confirm the discrepancies are resolved (or to see what&apos;s left).
+          </p>
         </section>
       )}
     </main>

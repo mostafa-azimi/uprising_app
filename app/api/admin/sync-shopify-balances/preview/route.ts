@@ -93,22 +93,55 @@ export async function POST(request: NextRequest) {
 
     const supabase = createSupabaseServiceClient();
 
-    // 2. Pull every active grant with a shopify_gift_card_id, paged
+    // 2. Pull every customer with a shopify_gift_card_id pointer set.
+    // We match at the CUSTOMER level (not grant level) so the comparison works
+    // even when individual grants are unlinked (e.g. created via skip-Shopify
+    // adjustments or DB-only flows). The customer's pointer is the source of
+    // truth for "which Shopify card does this customer own".
+    interface CustomerRow {
+      id: string;
+      shopify_gift_card_id: string;
+    }
+    const customers: CustomerRow[] = [];
+    let from = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from('customers')
+        .select('id, shopify_gift_card_id')
+        .not('shopify_gift_card_id', 'is', null)
+        .range(from, from + PAGE - 1);
+      if (error) {
+        log('error', 'customers_query_failed', { error: error.message });
+        return NextResponse.json({ error: `customers query: ${error.message}` }, { status: 500 });
+      }
+      if (!data || data.length === 0) break;
+      for (const c of data) {
+        if (!c.shopify_gift_card_id) continue;
+        customers.push({ id: c.id, shopify_gift_card_id: c.shopify_gift_card_id });
+      }
+      if (data.length < PAGE) break;
+      from += PAGE;
+    }
+    log('info', 'customers_pulled', { count: customers.length });
+
+    // 3. Pull all ACTIVE grants for those customers (any link state, including unlinked).
+    // We sum these per-customer to get the "app balance" for that customer.
     interface GrantRow {
       id: string;
       customer_id: string;
-      shopify_gift_card_id: string;
+      shopify_gift_card_id: string | null;
       remaining_amount: number;
       expires_on: string;
       status: string;
     }
-    const allGrants: GrantRow[] = [];
-    let from = 0;
+    const customerIdSet = new Set(customers.map((c) => c.id));
+    const allActiveGrants: GrantRow[] = [];
+    from = 0;
     while (true) {
       const { data, error } = await supabase
         .from('grants')
         .select('id, customer_id, shopify_gift_card_id, remaining_amount, expires_on, status')
-        .not('shopify_gift_card_id', 'is', null)
+        .eq('status', 'active')
         .range(from, from + PAGE - 1);
       if (error) {
         log('error', 'grants_query_failed', { error: error.message });
@@ -116,8 +149,8 @@ export async function POST(request: NextRequest) {
       }
       if (!data || data.length === 0) break;
       for (const g of data) {
-        if (!g.shopify_gift_card_id) continue;
-        allGrants.push({
+        if (!customerIdSet.has(g.customer_id)) continue;
+        allActiveGrants.push({
           id: g.id,
           customer_id: g.customer_id,
           shopify_gift_card_id: g.shopify_gift_card_id,
@@ -129,35 +162,33 @@ export async function POST(request: NextRequest) {
       if (data.length < PAGE) break;
       from += PAGE;
     }
-    log('info', 'grants_pulled', { count: allGrants.length });
+    log('info', 'grants_pulled', { count: allActiveGrants.length });
 
-    // 3. Group grants by (customer_id, shopify_gift_card_id), summing remaining_amount
-    interface GroupKey {
+    // 4. Group active grants per customer, sum up the balance, find earliest expiration.
+    interface Group {
       customer_id: string;
       gid: string;
-    }
-    interface Group extends GroupKey {
       grants: GrantRow[];
       db_total: number;
       earliest_expires: string | null;
     }
     const groupMap = new Map<string, Group>();
-    for (const g of allGrants) {
-      const key = `${g.customer_id}|${g.shopify_gift_card_id}`;
-      let entry = groupMap.get(key);
-      if (!entry) {
-        entry = {
-          customer_id: g.customer_id,
-          gid: g.shopify_gift_card_id,
-          grants: [],
-          db_total: 0,
-          earliest_expires: null,
-        };
-        groupMap.set(key, entry);
-      }
+    // Seed the map with one entry per customer (so customers with NO active
+    // grants still appear as $0 if Shopify has a balance for their card)
+    for (const c of customers) {
+      groupMap.set(c.id, {
+        customer_id: c.id,
+        gid: c.shopify_gift_card_id,
+        grants: [],
+        db_total: 0,
+        earliest_expires: null,
+      });
+    }
+    for (const g of allActiveGrants) {
+      const entry = groupMap.get(g.customer_id);
+      if (!entry) continue;
       entry.grants.push(g);
-      // Only count active grants in db_total — fully_redeemed/expired don't reflect available balance
-      if (g.status === 'active') entry.db_total += g.remaining_amount;
+      entry.db_total += g.remaining_amount;
       if (!entry.earliest_expires || g.expires_on < entry.earliest_expires) {
         entry.earliest_expires = g.expires_on;
       }

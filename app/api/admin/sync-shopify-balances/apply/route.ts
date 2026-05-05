@@ -140,13 +140,16 @@ export async function POST(request: NextRequest) {
           throw new Error(`invalid expires_on '${row.expires_on}' (expected YYYY-MM-DD)`);
         }
 
-        // Re-fetch current grants for this (customer, card). If the live DB
-        // total has drifted from what preview saw, skip and report "stale".
+        // Re-fetch ALL active grants for this customer (any link state, including unlinked).
+        // Reconcile is now matched at customer level, not grant level — the
+        // customer.shopify_gift_card_id pointer says "all this customer's
+        // active credit lives on that card", so every active grant counts
+        // toward the comparison and is eligible for FIFO debit.
         const { data: grants, error } = await supabase
           .from('grants')
-          .select('id, remaining_amount, expires_on, status')
+          .select('id, shopify_gift_card_id, remaining_amount, expires_on, status')
           .eq('customer_id', row.customer_id)
-          .eq('shopify_gift_card_id', row.shopify_gift_card_id);
+          .eq('status', 'active');
         if (error) throw new Error(`grants query: ${error.message}`);
         const grantList = grants ?? [];
 
@@ -299,10 +302,16 @@ export async function POST(request: NextRequest) {
 
         // Write grant updates — only ones that actually need a write
         for (const u of grantUpdates) {
+          const original = augmented.find((g) => g.id === u.id)!;
+          // Detect if this grant is currently unlinked. If so, we link it
+          // to the customer's Shopify card while we're touching it — that
+          // way subsequent reconciles keep finding it correctly.
+          const needsLink = (original as { shopify_gift_card_id?: string | null }).shopify_gift_card_id == null;
           const willChange =
             grantBalanceChanges.has(u.id) ||
             u.date_changed ||
-            u.new_status !== augmented.find((g) => g.id === u.id)!.status;
+            u.new_status !== original.status ||
+            needsLink;
           if (!willChange) continue;
           const updates: Record<string, unknown> = {
             remaining_amount: u.new_remaining,
@@ -311,6 +320,9 @@ export async function POST(request: NextRequest) {
           if (u.date_changed) updates.expires_on = u.new_expires_on;
           if (u.new_status === 'expired' || u.new_status === 'fully_redeemed') {
             updates.expired_at = new Date().toISOString();
+          }
+          if (needsLink) {
+            updates.shopify_gift_card_id = row.shopify_gift_card_id;
           }
           const { error: upErr } = await supabase.from('grants').update(updates).eq('id', u.id);
           if (upErr) throw new Error(`grant update ${u.id}: ${upErr.message}`);
