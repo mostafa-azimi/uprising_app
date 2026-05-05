@@ -248,7 +248,7 @@ export default function SyncShopifyBalancesPage() {
 
   async function runApplyOneB(row: DiscrepancyRow, mode: 'fix_db' | 'fix_shopify') {
     const k = rowKey(row);
-    setConfirmingKeyB(null);
+    setConfirmingB(null);
     setApplyBusyBKey(k);
     try {
       await runApply([row], mode, () => {});
