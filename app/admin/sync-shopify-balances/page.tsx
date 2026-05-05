@@ -6,6 +6,7 @@ import Link from 'next/link';
 interface DiscrepancyRow {
   customer_id: string;
   email: string;
+  customer_name: string | null;
   shopify_gift_card_id: string;
   last4: string | null;
   shopify_balance: number;
@@ -108,7 +109,7 @@ export default function SyncShopifyBalancesPage() {
     rows.sort((a, b) => {
       let cmp = 0;
       switch (sortKey) {
-        case 'email': cmp = a.email.localeCompare(b.email); break;
+        case 'email': cmp = (a.customer_name ?? a.email).localeCompare(b.customer_name ?? b.email); break;
         case 'last4': cmp = (a.last4 ?? '').localeCompare(b.last4 ?? ''); break;
         case 'db': cmp = a.db_total_remaining - b.db_total_remaining; break;
         case 'shopify': cmp = a.shopify_balance - b.shopify_balance; break;
@@ -385,7 +386,12 @@ export default function SyncShopifyBalancesPage() {
                               />
                             </td>
                             <td className="py-1.5 px-3">
-                              <Link href={`/customers/${r.customer_id}`} className="text-ink hover:underline text-xs">{r.email}</Link>
+                              <Link href={`/customers/${r.customer_id}`} className="text-ink hover:underline text-xs">
+                                {r.customer_name ? r.customer_name : r.email}
+                              </Link>
+                              {r.customer_name && (
+                                <div className="text-[11px] text-muted">{r.email}</div>
+                              )}
                               {!r.shopify_enabled && <span className="ml-2 text-xs text-muted">(disabled)</span>}
                             </td>
                             <td className="py-1.5 px-3 font-mono text-xs">{r.last4 ?? '—'}</td>

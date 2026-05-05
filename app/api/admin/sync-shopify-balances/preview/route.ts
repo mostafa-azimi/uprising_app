@@ -20,6 +20,7 @@ export const maxDuration = 300;
 export interface DiscrepancyRow {
   customer_id: string;
   email: string;
+  customer_name: string | null;          // "First Last" if available, else null
   shopify_gift_card_id: string;
   last4: string | null;
   shopify_balance: number;
@@ -163,14 +164,39 @@ export async function POST(request: NextRequest) {
     }
     log('info', 'groups_built', { count: groupMap.size });
 
-    // 4. Look up emails for affected customers
+    // 4. Look up emails + names for affected customers.
+    // PostgREST's URL length cap means `.in()` with thousands of UUIDs gets
+    // silently truncated. Chunk to 100 to stay well under the limit.
+    interface CustomerInfo { email: string; first_name: string | null; last_name: string | null }
     const customerIds = Array.from(new Set(Array.from(groupMap.values()).map((g) => g.customer_id)));
-    const emailById = new Map<string, string>();
-    for (let i = 0; i < customerIds.length; i += PAGE) {
-      const slice = customerIds.slice(i, i + PAGE);
-      const { data } = await supabase.from('customers').select('id, email').in('id', slice);
-      (data ?? []).forEach((c) => emailById.set(c.id, c.email));
+    const customerInfoById = new Map<string, CustomerInfo>();
+    const LOOKUP_CHUNK = 100;
+    for (let i = 0; i < customerIds.length; i += LOOKUP_CHUNK) {
+      const slice = customerIds.slice(i, i + LOOKUP_CHUNK);
+      const { data, error } = await supabase
+        .from('customers')
+        .select('id, email, first_name, last_name')
+        .in('id', slice);
+      if (error) {
+        log('warn', 'customer_lookup_chunk_failed', {
+          chunk_start: i,
+          chunk_size: slice.length,
+          error: error.message,
+        });
+        continue;
+      }
+      (data ?? []).forEach((c) =>
+        customerInfoById.set(c.id, {
+          email: c.email,
+          first_name: c.first_name,
+          last_name: c.last_name,
+        })
+      );
     }
+    log('info', 'customer_emails_resolved', {
+      requested: customerIds.length,
+      resolved: customerInfoById.size,
+    });
 
     // 5. Compare and build the diff list
     const rows: DiscrepancyRow[] = [];
@@ -191,9 +217,12 @@ export async function POST(request: NextRequest) {
       }
 
       const last4 = shopify.last4 ?? grp.gid.slice(-4);
+      const info = customerInfoById.get(grp.customer_id);
+      const fullName = info ? [info.first_name, info.last_name].filter(Boolean).join(' ') : '';
       rows.push({
         customer_id: grp.customer_id,
-        email: emailById.get(grp.customer_id) ?? '(unknown)',
+        email: info?.email ?? '(unknown)',
+        customer_name: fullName || null,
         shopify_gift_card_id: grp.gid,
         last4,
         shopify_balance: Math.round(shopify.balance * 100) / 100,
