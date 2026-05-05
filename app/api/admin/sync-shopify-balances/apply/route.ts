@@ -356,12 +356,55 @@ export async function POST(request: NextRequest) {
           );
           const toCredit = liveDelta;
           if (ordered.length === 0) {
+            // No active grants exist for this customer — create a NEW grant
+            // to hold the credit. Without this, the ledger entry alone wouldn't
+            // raise total_balance_cached because recomputeBalance only sums
+            // active grants.
+            const { data: existingEvent } = await supabase
+              .from('events')
+              .select('id')
+              .eq('name', 'Manual Adjustments')
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle();
+            let eventId = existingEvent?.id;
+            if (!eventId) {
+              const { data: createdEvent, error: evErr } = await supabase
+                .from('events')
+                .insert({ name: 'Manual Adjustments', host: 'Manual', status: 'completed', kind: 'system' })
+                .select('id')
+                .single();
+              if (evErr) throw new Error(`event insert: ${evErr.message}`);
+              eventId = createdEvent!.id;
+            }
+
+            // Pick an expiration: the row's override if set, otherwise 1 year from today
+            const newExpiresOn = rowExpiresOn
+              ?? new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+            const { data: newGrant, error: ngErr } = await supabase
+              .from('grants')
+              .insert({
+                customer_id: row.customer_id,
+                event_id: eventId,
+                initial_amount: toCredit,
+                remaining_amount: toCredit,
+                expires_on: newExpiresOn,
+                reason: 'Shopify sync',
+                note: `Shopify sync reconciliation — Shopify had $${targetBalance.toFixed(2)}, DB had $${liveDbTotal.toFixed(2)}`,
+                status: 'active',
+                shopify_gift_card_id: row.shopify_gift_card_id,
+              })
+              .select('id')
+              .single();
+            if (ngErr) throw new Error(`new grant insert: ${ngErr.message}`);
+
             ledgerInserts.push({
               customer_id: row.customer_id,
-              grant_id: '',
+              grant_id: newGrant!.id,
               type: 'adjust',
               amount: Math.round(toCredit * 100) / 100,
-              description: `Shopify sync reconciliation — set total to $${targetBalance.toFixed(2)} (was $${liveDbTotal.toFixed(2)}, no active grant to credit)`,
+              description: baseDesc,
               created_by: user.id,
               created_by_email: user.email ?? 'shopify sync',
             });
