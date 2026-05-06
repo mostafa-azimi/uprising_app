@@ -1,7 +1,7 @@
 'use client';
 
 import { jsPDF } from 'jspdf';
-import { lineTotal, type InvoiceData, type LineItem } from './invoice-editor';
+import { lineTotal, type InvoiceData, type LineItem } from './types';
 
 /**
  * Renders an invoice as a one-page PDF and triggers download.

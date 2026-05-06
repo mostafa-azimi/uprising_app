@@ -1,7 +1,8 @@
 import { notFound, redirect } from 'next/navigation';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { requireMember } from '@/lib/auth';
-import { InvoiceEditor, type InvoiceData, DEFAULT_BILL_TO, DEFAULT_REMIT_TO } from '../invoice-editor';
+import { InvoiceEditor } from '../invoice-editor';
+import { type InvoiceData, DEFAULT_BILL_TO, DEFAULT_REMIT_TO } from '../types';
 
 export const dynamic = 'force-dynamic';
 

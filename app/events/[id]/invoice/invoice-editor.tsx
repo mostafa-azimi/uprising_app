@@ -4,6 +4,13 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { downloadInvoicePdf } from './pdf';
+import {
+  DEFAULT_BILL_TO,
+  DEFAULT_REMIT_TO,
+  lineTotal,
+  type InvoiceData,
+  type LineItem,
+} from './types';
 
 /**
  * Invoice editor — single screen with:
@@ -16,40 +23,6 @@ import { downloadInvoicePdf } from './pdf';
  * Line item amounts can be NEGATIVE — that's how we add credits/refunds that
  * reduce the invoice total.
  */
-
-export const DEFAULT_BILL_TO = {
-  name: 'NADGT',
-  address: '3061 N Columbia St Suite D\nMilledgeville, GA 31061',
-};
-
-export const DEFAULT_REMIT_TO = {
-  name: 'DiscHub',
-  address: '3061 N Columbia St Suite D\nMilledgeville, GA 31061',
-};
-
-export interface LineItem {
-  description: string;
-  amount: number;
-  discount_pct: number;
-}
-
-export interface InvoiceData {
-  id: string | null;
-  event_id: string | null;
-  event_name: string | null;
-  invoice_number: string | null;
-  invoice_date: string;             // YYYY-MM-DD
-  due_date: string | null;
-  payment_terms: string | null;
-  bill_to_name: string;
-  bill_to_address: string;
-  remit_to_name: string;
-  remit_to_address: string;
-  line_items: LineItem[];
-  notes: string | null;
-  status: 'draft' | 'sent' | 'paid' | 'void';
-  paid_at: string | null;
-}
 
 function fmtMoney(n: number) {
   const sign = n < 0 ? '-' : '';
@@ -64,12 +37,6 @@ function fmtDateLong(iso: string | null): string {
   if (!y || !m || !d) return iso;
   const dt = new Date(y, m - 1, d);
   return dt.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
-}
-
-export function lineTotal(li: LineItem): number {
-  const discount = Math.max(0, Math.min(100, Number(li.discount_pct) || 0));
-  const amt = Number(li.amount) || 0;
-  return Math.round(amt * (1 - discount / 100) * 100) / 100;
 }
 
 export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; eventId: string }) {
