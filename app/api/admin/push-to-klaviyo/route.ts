@@ -19,8 +19,10 @@ interface PreviewResult {
   ok: boolean;
   since: string;
   until: string | null;
-  customer_count: number;
-  customer_ids_sample: string[];
+  customer_count: number;             // total candidates in the date range
+  already_pushed_count: number;       // already had a successful Klaviyo push since "since"
+  remaining_count: number;            // candidates - already_pushed (these will be pushed)
+  customer_ids_sample: string[];      // sample of remaining (not already pushed)
 }
 
 interface ApplyOutcome {
@@ -75,6 +77,39 @@ async function findRecentlyActiveCustomers(args: {
   return Array.from(ids);
 }
 
+/**
+ * Of a candidate set, return the customer_ids that already received a
+ * successful Klaviyo push within the date range. We treat these as "done"
+ * so repeated Push clicks make forward progress instead of re-pushing the
+ * same first 200 over and over.
+ */
+async function findAlreadyPushedSince(args: {
+  candidateIds: string[];
+  sinceISO: string;
+}): Promise<Set<string>> {
+  const supabase = createSupabaseServiceClient();
+  const out = new Set<string>();
+  if (args.candidateIds.length === 0) return out;
+  // Chunk to avoid PostgREST URL length limit on .in()
+  const FETCH_CHUNK = 100;
+  for (let i = 0; i < args.candidateIds.length; i += FETCH_CHUNK) {
+    const slice = args.candidateIds.slice(i, i + FETCH_CHUNK);
+    const { data, error } = await supabase
+      .from('sync_log')
+      .select('entity_id, created_at')
+      .eq('target', 'klaviyo')
+      .eq('operation', 'profile_property_sync')
+      .eq('ok', true)
+      .in('entity_id', slice)
+      .gte('created_at', args.sinceISO);
+    if (error) throw new Error(`sync_log query: ${error.message}`);
+    (data ?? []).forEach((r) => {
+      if (r.entity_id) out.add(r.entity_id);
+    });
+  }
+  return out;
+}
+
 export async function POST(request: NextRequest) {
   const t0 = Date.now();
   try {
@@ -106,26 +141,33 @@ export async function POST(request: NextRequest) {
     untilISO = u.toISOString();
   }
 
-  let customerIds: string[];
+  let candidateIds: string[];
+  let alreadyPushed: Set<string>;
   try {
-    customerIds = await findRecentlyActiveCustomers({ sinceISO, untilISO });
+    candidateIds = await findRecentlyActiveCustomers({ sinceISO, untilISO });
+    alreadyPushed = await findAlreadyPushedSince({ candidateIds, sinceISO });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 500 });
   }
+
+  // Remaining = candidates - already-pushed. These are the ones we still need to push.
+  const remainingIds = candidateIds.filter((id) => !alreadyPushed.has(id));
 
   if (body.action === 'preview') {
     const result: PreviewResult = {
       ok: true,
       since: sinceISO,
       until: untilISO,
-      customer_count: customerIds.length,
-      customer_ids_sample: customerIds.slice(0, 20),
+      customer_count: candidateIds.length,
+      already_pushed_count: alreadyPushed.size,
+      remaining_count: remainingIds.length,
+      customer_ids_sample: remainingIds.slice(0, 20),
     };
     return NextResponse.json(result);
   }
 
   // Apply path — synchronously push, with concurrency, capped per call.
-  const ids = customerIds.slice(0, MAX_PER_CALL);
+  const ids = remainingIds.slice(0, MAX_PER_CALL);
 
   const supabase = createSupabaseServiceClient();
   // Fetch all customer records in one batch (chunked to avoid URL limit)

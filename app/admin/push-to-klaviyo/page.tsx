@@ -8,6 +8,8 @@ interface PreviewResult {
   since: string;
   until: string | null;
   customer_count: number;
+  already_pushed_count: number;
+  remaining_count: number;
   customer_ids_sample: string[];
 }
 
@@ -171,14 +173,26 @@ export default function PushToKlaviyoPage() {
       {preview && (
         <section className="border border-line rounded-xl bg-white p-6 mb-6">
           <h2 className="font-bold mb-3">Preview</h2>
-          <p className="text-sm">
-            <strong>{preview.customer_count.toLocaleString()}</strong> distinct customer
-            {preview.customer_count === 1 ? '' : 's'} had a ledger entry in this range.
-          </p>
-          {preview.customer_count > 200 && (
-            <p className="text-xs text-amber-700 bg-yellow-50 border border-yellow-200 rounded-md px-3 py-2 mt-3">
-              Each Push click handles up to 200. You&apos;ll need to click Push multiple times (or
-              shrink the range) for all of them.
+          <dl className="grid grid-cols-2 gap-2 text-sm mb-3">
+            <Row label="Customers in date range (candidates)" value={preview.customer_count.toLocaleString()} />
+            <Row label="Already pushed in this range (skipped)" value={preview.already_pushed_count.toLocaleString()} />
+            <Row label="Remaining to push" value={preview.remaining_count.toLocaleString()} bold />
+          </dl>
+          {preview.remaining_count === 0 && preview.customer_count > 0 && (
+            <p className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2 mt-3">
+              <strong>All caught up.</strong> Every customer in this range has already been pushed
+              successfully.
+            </p>
+          )}
+          {preview.remaining_count > 200 && (
+            <p className="text-xs text-amber-800 bg-yellow-50 border border-yellow-200 rounded-md px-3 py-2 mt-3">
+              Each Push click handles up to 200. You&apos;ll need to click Push multiple times to
+              cover all {preview.remaining_count} remaining.
+            </p>
+          )}
+          {preview.remaining_count > 0 && preview.remaining_count <= 200 && (
+            <p className="text-xs text-muted mt-3">
+              One more Push click finishes this range.
             </p>
           )}
         </section>
