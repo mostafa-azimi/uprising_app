@@ -23,6 +23,11 @@ export default function ToolsPage() {
           desc="Pull paid Shopify orders in a date range and process gift_card transactions through the same logic as the orders/paid webhook. Updates balances + revenue attribution."
         />
         <Card
+          href="/admin/attribute-orders"
+          title="Attribute orders to events"
+          desc="Read-only for loyalty: maps recent paid Shopify orders to events for revenue attribution. Does NOT touch ledger, gift card balances, Klaviyo, or Shopify."
+        />
+        <Card
           href="/test-connections"
           title="Test connections"
           desc="Verify Supabase, Shopify, and Klaviyo are reachable from this deployment."

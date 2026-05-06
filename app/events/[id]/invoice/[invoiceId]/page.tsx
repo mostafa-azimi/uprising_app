@@ -48,6 +48,7 @@ export default async function ExistingInvoicePage({
     remit_to_name: invoice.remit_to_name ?? '',
     remit_to_address: invoice.remit_to_address ?? '',
     line_items: items,
+    invoice_discount_pct: Number(invoice.invoice_discount_pct ?? 0),
     notes: invoice.notes,
     status,
     paid_at: invoice.paid_at,

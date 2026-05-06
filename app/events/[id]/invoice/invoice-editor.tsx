@@ -7,6 +7,7 @@ import { downloadInvoicePdf } from './pdf';
 import {
   DEFAULT_BILL_TO,
   DEFAULT_REMIT_TO,
+  computeTotals,
   lineTotal,
   type InvoiceData,
   type LineItem,
@@ -47,10 +48,10 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
   const [error, setError] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
 
-  const subtotal = useMemo(() => {
-    return data.line_items.reduce((s, li) => s + lineTotal(li), 0);
-  }, [data.line_items]);
-  const total = subtotal;
+  const { subtotal, invoiceDiscountAmount, total } = useMemo(
+    () => computeTotals(data.line_items, data.invoice_discount_pct),
+    [data.line_items, data.invoice_discount_pct]
+  );
 
   const isPaid = data.status === 'paid';
   const readOnly = isPaid;
@@ -91,6 +92,8 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           ...data,
+          // server recomputes from line_items + invoice_discount_pct, but we
+          // send these for visibility in the API logs.
           subtotal: Math.round(subtotal * 100) / 100,
           total: Math.round(total * 100) / 100,
         }),
@@ -149,6 +152,7 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
     downloadInvoicePdf({
       ...data,
       subtotal: Math.round(subtotal * 100) / 100,
+      invoiceDiscountAmount: Math.round(invoiceDiscountAmount * 100) / 100,
       total: Math.round(total * 100) / 100,
     });
   }
@@ -391,6 +395,38 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
                 <div className="text-sm text-muted text-center py-4">No lines yet.</div>
               )}
             </div>
+
+            {/* Whole-invoice discount (applied AFTER per-line discounts) */}
+            <div className="mt-5 pt-4 border-t border-line">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-medium">Invoice-wide discount</div>
+                  <div className="text-xs text-muted">
+                    Applied to the subtotal after each line&rsquo;s own discount.
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    step="1"
+                    min={0}
+                    max={100}
+                    value={Number.isFinite(data.invoice_discount_pct) ? data.invoice_discount_pct : 0}
+                    onChange={(e) =>
+                      patch('invoice_discount_pct', parseFloat(e.target.value) || 0)
+                    }
+                    disabled={readOnly}
+                    className="w-20 px-2 py-1 border border-line rounded text-sm text-right disabled:bg-slate-100"
+                  />
+                  <span className="text-sm text-muted">%</span>
+                </div>
+              </div>
+              {data.invoice_discount_pct > 0 && (
+                <div className="mt-2 text-xs text-muted text-right">
+                  Discount: −{fmtMoney(invoiceDiscountAmount)}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="border border-line rounded-xl bg-white p-5">
@@ -408,7 +444,12 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
 
         {/* RIGHT: live preview matching the PDF */}
         <section className="lg:sticky lg:top-6 self-start">
-          <InvoicePreview data={data} subtotal={subtotal} total={total} />
+          <InvoicePreview
+            data={data}
+            subtotal={subtotal}
+            invoiceDiscountAmount={invoiceDiscountAmount}
+            total={total}
+          />
         </section>
       </div>
     </main>
@@ -435,10 +476,12 @@ function Field({
 function InvoicePreview({
   data,
   subtotal,
+  invoiceDiscountAmount,
   total,
 }: {
   data: InvoiceData;
   subtotal: number;
+  invoiceDiscountAmount: number;
   total: number;
 }) {
   return (
@@ -509,6 +552,14 @@ function InvoicePreview({
               <div className="text-muted">Subtotal</div>
               <div>{fmtMoney(subtotal)}</div>
             </div>
+            {data.invoice_discount_pct > 0 && (
+              <div className="flex justify-between text-sm">
+                <div className="text-muted">
+                  Discount ({data.invoice_discount_pct}%)
+                </div>
+                <div>−{fmtMoney(invoiceDiscountAmount)}</div>
+              </div>
+            )}
             <div className="flex justify-between text-base font-semibold border-t border-line pt-1">
               <div>Total</div>
               <div>{fmtMoney(total)}</div>

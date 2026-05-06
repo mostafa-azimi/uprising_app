@@ -62,36 +62,69 @@ export default async function EventDetail({ params }: { params: { id: string } }
     .eq('event_id', params.id)
     .order('created_at', { ascending: false });
 
-  // Revenue attribution: pull every redemption ledger row whose grant belongs to THIS event,
-  // then look up the corresponding redemption_orders to get full order totals + non-gift-card amount.
+  // Revenue attribution combines two sources:
+  //  (a) redemption_orders rows whose `event_id` is THIS event — populated by
+  //      the live orders/paid webhook AND the read-only "Attribute orders to events" tool.
+  //  (b) any redemption_orders row reachable via ledger.grant_id → grant.event_id —
+  //      a fallback for older rows that pre-date the event_id column.
+  // Dedup by shopify_order_id so a row covered by both sources isn't double counted.
   const grantIds = (grants ?? []).map((g) => g.id);
   let totalGcRedeemed = 0;
   let attributedRevenue = 0;
   let attributedOther = 0;
   let distinctOrderCount = 0;
+
+  const byOrderId = new Map<
+    string,
+    { order_total: number; gift_card_amount: number; other_amount: number }
+  >();
+
+  // (a) Direct event-attribution rows
+  const { data: directAttribution } = await supabase
+    .from('redemption_orders')
+    .select('shopify_order_id, order_total, gift_card_amount, other_amount')
+    .eq('event_id', params.id);
+  (directAttribution ?? []).forEach((o) => {
+    if (!o.shopify_order_id) return;
+    byOrderId.set(o.shopify_order_id, {
+      order_total: Number(o.order_total ?? 0),
+      gift_card_amount: Number(o.gift_card_amount ?? 0),
+      other_amount: Number(o.other_amount ?? 0),
+    });
+  });
+
+  // (b) Fallback: orders reachable via ledger
   if (grantIds.length > 0) {
     const { data: redLedger } = await supabase
       .from('ledger')
-      .select('amount, shopify_order_id')
+      .select('shopify_order_id')
       .in('grant_id', grantIds)
       .eq('type', 'redeem');
-    const orderIds = new Set<string>();
-    (redLedger ?? []).forEach((r) => {
-      totalGcRedeemed += Math.abs(Number(r.amount ?? 0));
-      if (r.shopify_order_id) orderIds.add(r.shopify_order_id);
-    });
-    distinctOrderCount = orderIds.size;
-    if (orderIds.size > 0) {
+    const fallbackOrderIds = Array.from(
+      new Set((redLedger ?? []).map((r) => r.shopify_order_id).filter((x): x is string => !!x))
+    ).filter((id) => !byOrderId.has(id));
+    if (fallbackOrderIds.length > 0) {
       const { data: orders } = await supabase
         .from('redemption_orders')
-        .select('order_total, gift_card_amount, other_amount')
-        .in('shopify_order_id', Array.from(orderIds));
+        .select('shopify_order_id, order_total, gift_card_amount, other_amount')
+        .in('shopify_order_id', fallbackOrderIds);
       (orders ?? []).forEach((o) => {
-        attributedRevenue += Number(o.order_total ?? 0);
-        attributedOther += Number(o.other_amount ?? 0);
+        if (!o.shopify_order_id) return;
+        byOrderId.set(o.shopify_order_id, {
+          order_total: Number(o.order_total ?? 0),
+          gift_card_amount: Number(o.gift_card_amount ?? 0),
+          other_amount: Number(o.other_amount ?? 0),
+        });
       });
     }
   }
+
+  for (const o of byOrderId.values()) {
+    attributedRevenue += o.order_total;
+    attributedOther += o.other_amount;
+    totalGcRedeemed += o.gift_card_amount;
+  }
+  distinctOrderCount = byOrderId.size;
 
   return (
     <main className="min-h-screen px-8 py-10 max-w-6xl mx-auto">

@@ -46,6 +46,8 @@ function setDraw(doc: jsPDF, color: [number, number, number]) {
 
 export interface InvoiceForPdf extends InvoiceData {
   subtotal: number;
+  /** Dollar amount of the whole-invoice discount (subtotal × pct/100) */
+  invoiceDiscountAmount: number;
   total: number;
 }
 
@@ -190,23 +192,36 @@ function renderTable(doc: jsPDF, items: LineItem[], y: number): number {
 function renderTotals(doc: jsPDF, data: InvoiceForPdf, y: number): number {
   const labelX = PAGE_W - MARGIN_X - 60;
   const valueX = PAGE_W - MARGIN_X;
+  let cursor = y + 6;
 
   setColor(doc, MUTED);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  doc.text('Subtotal', labelX, y + 6);
+  doc.text('Subtotal', labelX, cursor);
   setColor(doc, INK);
-  doc.text(fmtMoney(data.subtotal), valueX, y + 6, { align: 'right' });
+  doc.text(fmtMoney(data.subtotal), valueX, cursor, { align: 'right' });
+  cursor += 5;
+
+  if (data.invoice_discount_pct > 0 && data.invoiceDiscountAmount > 0) {
+    setColor(doc, MUTED);
+    doc.text(`Discount (${data.invoice_discount_pct}%)`, labelX, cursor);
+    setColor(doc, INK);
+    doc.text(`-${fmtMoney(data.invoiceDiscountAmount)}`, valueX, cursor, {
+      align: 'right',
+    });
+    cursor += 5;
+  }
 
   setDraw(doc, LINE);
   doc.setLineWidth(0.3);
-  doc.line(labelX, y + 9, valueX, y + 9);
+  doc.line(labelX, cursor, valueX, cursor);
+  cursor += 6;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
-  doc.text('Total', labelX, y + 15);
-  doc.text(fmtMoney(data.total), valueX, y + 15, { align: 'right' });
-  return y + 18;
+  doc.text('Total', labelX, cursor);
+  doc.text(fmtMoney(data.total), valueX, cursor, { align: 'right' });
+  return cursor + 3;
 }
 
 function renderRemitTo(doc: jsPDF, data: InvoiceForPdf, y: number): number {

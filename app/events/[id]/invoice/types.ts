@@ -23,6 +23,8 @@ export interface InvoiceData {
   remit_to_name: string;
   remit_to_address: string;
   line_items: LineItem[];
+  /** Whole-invoice discount applied AFTER per-line discounts. 0–100. */
+  invoice_discount_pct: number;
   notes: string | null;
   status: 'draft' | 'sent' | 'paid' | 'void';
   paid_at: string | null;
@@ -42,4 +44,19 @@ export function lineTotal(li: LineItem): number {
   const discount = Math.max(0, Math.min(100, Number(li.discount_pct) || 0));
   const amt = Number(li.amount) || 0;
   return Math.round(amt * (1 - discount / 100) * 100) / 100;
+}
+
+/**
+ * Compute the invoice subtotal (sum of line totals) and final total
+ * (subtotal * (1 - invoice_discount_pct/100)).
+ */
+export function computeTotals(
+  lines: LineItem[],
+  invoiceDiscountPct: number
+): { subtotal: number; invoiceDiscountAmount: number; total: number } {
+  const subtotal = Math.round(lines.reduce((s, li) => s + lineTotal(li), 0) * 100) / 100;
+  const pct = Math.max(0, Math.min(100, Number(invoiceDiscountPct) || 0));
+  const invoiceDiscountAmount = Math.round(subtotal * (pct / 100) * 100) / 100;
+  const total = Math.round((subtotal - invoiceDiscountAmount) * 100) / 100;
+  return { subtotal, invoiceDiscountAmount, total };
 }

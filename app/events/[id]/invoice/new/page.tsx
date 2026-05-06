@@ -76,6 +76,7 @@ export default async function NewInvoicePage({ params }: { params: { id: string 
         discount_pct: 25,
       },
     ],
+    invoice_discount_pct: 0,
     notes: null,
     status: 'draft',
     paid_at: null,

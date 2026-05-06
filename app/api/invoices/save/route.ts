@@ -31,6 +31,7 @@ const Body = z.object({
   remit_to_name: z.string().max(200),
   remit_to_address: z.string().max(1000),
   line_items: z.array(LineItemSchema).max(50),
+  invoice_discount_pct: z.number().min(0).max(100).default(0),
   notes: z.string().max(2000).nullable(),
 });
 
@@ -67,7 +68,8 @@ export async function POST(request: NextRequest) {
     line_total: lineTotal(li),
   }));
   const subtotal = Math.round(lineItems.reduce((s, li) => s + li.line_total, 0) * 100) / 100;
-  const total = subtotal;
+  const invoiceDiscountPct = Math.max(0, Math.min(100, body.invoice_discount_pct));
+  const total = Math.round(subtotal * (1 - invoiceDiscountPct / 100) * 100) / 100;
 
   const supabase = createSupabaseServiceClient();
 
@@ -103,6 +105,7 @@ export async function POST(request: NextRequest) {
         remit_to_name: body.remit_to_name,
         remit_to_address: body.remit_to_address,
         line_items: lineItems,
+        invoice_discount_pct: invoiceDiscountPct,
         subtotal,
         total,
         notes: body.notes,
@@ -137,6 +140,7 @@ export async function POST(request: NextRequest) {
       remit_to_name: body.remit_to_name,
       remit_to_address: body.remit_to_address,
       line_items: lineItems,
+      invoice_discount_pct: invoiceDiscountPct,
       subtotal,
       total,
       notes: body.notes,
