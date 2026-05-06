@@ -9,6 +9,8 @@ import {
   DEFAULT_REMIT_TO,
   computeTotals,
   lineTotal,
+  lineSubtotal,
+  normalizeLineItem,
   type InvoiceData,
   type LineItem,
 } from './types';
@@ -42,7 +44,10 @@ function fmtDateLong(iso: string | null): string {
 
 export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; eventId: string }) {
   const router = useRouter();
-  const [data, setData] = useState<InvoiceData>(initial);
+  const [data, setData] = useState<InvoiceData>(() => ({
+    ...initial,
+    line_items: initial.line_items.map((li) => normalizeLineItem(li)),
+  }));
   const [saving, setSaving] = useState(false);
   const [marking, setMarking] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -64,14 +69,26 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
   function patchLine(idx: number, patch: Partial<LineItem>) {
     setData((prev) => ({
       ...prev,
-      line_items: prev.line_items.map((li, i) => (i === idx ? { ...li, ...patch } : li)),
+      line_items: prev.line_items.map((li, i) => {
+        if (i !== idx) return li;
+        const merged = { ...li, ...patch };
+        // Keep `amount` in sync with quantity × unit_price so the JSON we save
+        // is self-consistent (older rows reading `amount` still work).
+        const qty = Number(merged.quantity) || 0;
+        const unit = Number(merged.unit_price) || 0;
+        merged.amount = Math.round(qty * unit * 100) / 100;
+        return merged;
+      }),
     }));
   }
 
   function addLine() {
     setData((prev) => ({
       ...prev,
-      line_items: [...prev.line_items, { description: '', amount: 0, discount_pct: 0 }],
+      line_items: [
+        ...prev.line_items,
+        { description: '', quantity: 1, unit_price: 0, amount: 0, discount_pct: 0 },
+      ],
     }));
   }
 
@@ -369,37 +386,65 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
               )}
             </div>
             <p className="text-xs text-muted mb-3">
-              Amounts can be negative to credit/reduce the invoice.
+              Enter quantity and unit price — line subtotal is computed automatically. Use a negative quantity or unit price to credit/reduce the invoice.
             </p>
             <div className="space-y-3">
               {data.line_items.map((li, idx) => (
-                <div key={idx} className="border border-line rounded-lg p-3 bg-slate-50/40">
-                  <div className="grid grid-cols-12 gap-2">
-                    <div className="col-span-12 sm:col-span-6">
-                      <label className="text-xs text-muted">Description</label>
-                      <input
-                        type="text"
-                        value={li.description}
-                        onChange={(e) => patchLine(idx, { description: e.target.value })}
-                        disabled={readOnly}
-                        className="w-full px-2 py-1 border border-line rounded text-sm disabled:bg-slate-100"
-                      />
-                    </div>
-                    <div className="col-span-4 sm:col-span-2">
-                      <label className="text-xs text-muted">Amount</label>
+                <div
+                  key={idx}
+                  className="relative border border-line rounded-lg p-3 pr-9 bg-slate-50/40"
+                >
+                  {!readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => removeLine(idx)}
+                      title="Remove line"
+                      aria-label="Remove line"
+                      className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center text-muted hover:text-bad hover:bg-rose-50 rounded transition text-base leading-none"
+                    >
+                      ×
+                    </button>
+                  )}
+
+                  <label className="text-xs text-muted block mb-1">Description</label>
+                  <input
+                    type="text"
+                    value={li.description}
+                    onChange={(e) => patchLine(idx, { description: e.target.value })}
+                    disabled={readOnly}
+                    placeholder="e.g. Discs, Payout, Event credits"
+                    className="w-full px-2 py-1 border border-line rounded text-sm disabled:bg-slate-100"
+                  />
+
+                  <div className="grid grid-cols-12 gap-2 mt-2">
+                    <div className="col-span-3 sm:col-span-2">
+                      <label className="text-xs text-muted">Qty</label>
                       <input
                         type="number"
-                        step="0.01"
-                        value={Number.isFinite(li.amount) ? li.amount : 0}
+                        step="1"
+                        value={Number.isFinite(li.quantity) ? li.quantity : 1}
                         onChange={(e) =>
-                          patchLine(idx, { amount: parseFloat(e.target.value) || 0 })
+                          patchLine(idx, { quantity: parseFloat(e.target.value) || 0 })
                         }
                         disabled={readOnly}
                         className="w-full px-2 py-1 border border-line rounded text-sm disabled:bg-slate-100"
                       />
                     </div>
-                    <div className="col-span-4 sm:col-span-2">
-                      <label className="text-xs text-muted">Discount %</label>
+                    <div className="col-span-4 sm:col-span-3">
+                      <label className="text-xs text-muted">Unit price</label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={Number.isFinite(li.unit_price) ? li.unit_price : 0}
+                        onChange={(e) =>
+                          patchLine(idx, { unit_price: parseFloat(e.target.value) || 0 })
+                        }
+                        disabled={readOnly}
+                        className="w-full px-2 py-1 border border-line rounded text-sm disabled:bg-slate-100"
+                      />
+                    </div>
+                    <div className="col-span-2 sm:col-span-2">
+                      <label className="text-xs text-muted">Disc %</label>
                       <input
                         type="number"
                         step="1"
@@ -413,20 +458,13 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
                         className="w-full px-2 py-1 border border-line rounded text-sm disabled:bg-slate-100"
                       />
                     </div>
-                    <div className="col-span-4 sm:col-span-2 flex items-end justify-between gap-2">
-                      <div>
-                        <div className="text-xs text-muted">Total</div>
-                        <div className="text-sm font-semibold">{fmtMoney(lineTotal(li))}</div>
-                      </div>
-                      {!readOnly && (
-                        <button
-                          type="button"
-                          onClick={() => removeLine(idx)}
-                          className="text-xs text-bad hover:underline self-end"
-                          title="Remove line"
-                        >
-                          remove
-                        </button>
+                    <div className="col-span-3 sm:col-span-3 flex flex-col items-end justify-end pb-1">
+                      <div className="text-xs text-muted">Line total</div>
+                      <div className="text-sm font-semibold">{fmtMoney(lineTotal(li))}</div>
+                      {li.discount_pct > 0 && (
+                        <div className="text-[10px] text-muted">
+                          from {fmtMoney(lineSubtotal(li))}
+                        </div>
                       )}
                     </div>
                   </div>
@@ -574,16 +612,26 @@ function InvoicePreview({
             </tr>
           </thead>
           <tbody>
-            {data.line_items.map((li, idx) => (
-              <tr key={idx} className="border-b border-line/50">
-                <td className="py-2">{li.description || <span className="text-muted">—</span>}</td>
-                <td className="py-2 text-right">{fmtMoney(li.amount)}</td>
-                <td className="py-2 text-right">
-                  {li.discount_pct ? `${li.discount_pct}%` : '—'}
-                </td>
-                <td className="py-2 text-right font-semibold">{fmtMoney(lineTotal(li))}</td>
-              </tr>
-            ))}
+            {data.line_items.map((li, idx) => {
+              const showQty = Number(li.quantity) !== 1 || Number(li.unit_price) !== Number(li.amount);
+              return (
+                <tr key={idx} className="border-b border-line/50">
+                  <td className="py-2">
+                    {li.description || <span className="text-muted">—</span>}
+                    {showQty && (
+                      <div className="text-xs text-muted">
+                        {li.quantity} × {fmtMoney(li.unit_price)}
+                      </div>
+                    )}
+                  </td>
+                  <td className="py-2 text-right">{fmtMoney(lineSubtotal(li))}</td>
+                  <td className="py-2 text-right">
+                    {li.discount_pct ? `${li.discount_pct}%` : '—'}
+                  </td>
+                  <td className="py-2 text-right font-semibold">{fmtMoney(lineTotal(li))}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
 

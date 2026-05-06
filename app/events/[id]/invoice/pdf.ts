@@ -1,7 +1,7 @@
 'use client';
 
 import { jsPDF } from 'jspdf';
-import { lineTotal, type InvoiceData, type LineItem } from './types';
+import { lineSubtotal, lineTotal, type InvoiceData, type LineItem } from './types';
 
 /**
  * Renders an invoice as a one-page PDF and triggers download.
@@ -172,14 +172,32 @@ function renderTable(doc: jsPDF, items: LineItem[], y: number): number {
     doc.setFont('helvetica', 'normal');
     doc.text(descLines, COL_DESC_X, rowY);
 
-    doc.text(fmtMoney(li.amount), COL_AMOUNT_X, rowY, { align: 'right' });
+    // If quantity != 1 OR unit_price differs from amount (i.e. user entered
+    // qty × unit price rather than a single lump amount), render the
+    // breakdown under the description in a smaller muted line.
+    const subtotal = lineSubtotal(li);
+    const showBreakdown =
+      Number(li.quantity) !== 1 || Math.abs(Number(li.unit_price) - subtotal) > 0.005;
+
+    let breakdownLines = 0;
+    if (showBreakdown) {
+      const breakdownY = rowY + descLines.length * 4.5;
+      doc.setFontSize(8);
+      setColor(doc, MUTED);
+      doc.text(`${li.quantity} × ${fmtMoney(li.unit_price)}`, COL_DESC_X, breakdownY);
+      doc.setFontSize(10);
+      setColor(doc, INK);
+      breakdownLines = 1;
+    }
+
+    doc.text(fmtMoney(subtotal), COL_AMOUNT_X, rowY, { align: 'right' });
     doc.text(li.discount_pct ? `${li.discount_pct}%` : '—', COL_DISCOUNT_X, rowY, {
       align: 'right',
     });
     doc.setFont('helvetica', 'bold');
     doc.text(fmtMoney(lineTotal(li)), COL_TOTAL_X, rowY, { align: 'right' });
 
-    const consumed = Math.max(descLines.length * 4.5, 6);
+    const consumed = Math.max((descLines.length + breakdownLines) * 4.5, 6);
     rowY += consumed;
     setDraw(doc, LINE);
     doc.setLineWidth(0.1);

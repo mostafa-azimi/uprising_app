@@ -6,8 +6,39 @@
 
 export interface LineItem {
   description: string;
+  /** Quantity, defaults to 1 for legacy rows that didn't store it */
+  quantity: number;
+  /** Unit price; for legacy rows we backfill this from `amount` */
+  unit_price: number;
+  /** Subtotal before line discount (= quantity × unit_price). Stored for
+   *  backwards compatibility with older rows that only had `amount`. */
   amount: number;
   discount_pct: number;
+}
+
+/**
+ * Older invoices were stored with only { description, amount, discount_pct }.
+ * Coerce them into the qty/unit_price shape so the editor can display them.
+ */
+export function normalizeLineItem(raw: Partial<LineItem> & Record<string, unknown>): LineItem {
+  const description = typeof raw.description === 'string' ? raw.description : '';
+  const discount_pct = Number(raw.discount_pct ?? 0) || 0;
+
+  const rawQty = raw.quantity;
+  const rawUnit = raw.unit_price;
+  const rawAmount = raw.amount;
+
+  let quantity = Number(rawQty);
+  let unit_price = Number(rawUnit);
+
+  if (!Number.isFinite(quantity) || quantity === 0) quantity = 1;
+  if (!Number.isFinite(unit_price)) {
+    // Legacy rows: amount IS the subtotal, so unit_price = amount / 1 = amount
+    unit_price = Number(rawAmount ?? 0) || 0;
+  }
+
+  const amount = Math.round(quantity * unit_price * 100) / 100;
+  return { description, quantity, unit_price, amount, discount_pct };
 }
 
 export interface InvoiceData {
@@ -42,8 +73,21 @@ export const DEFAULT_REMIT_TO = {
 
 export function lineTotal(li: LineItem): number {
   const discount = Math.max(0, Math.min(100, Number(li.discount_pct) || 0));
-  const amt = Number(li.amount) || 0;
-  return Math.round(amt * (1 - discount / 100) * 100) / 100;
+  // Prefer qty × unit_price; fall back to legacy `amount` field.
+  const qty = Number(li.quantity);
+  const unit = Number(li.unit_price);
+  const subtotal =
+    Number.isFinite(qty) && Number.isFinite(unit) && (qty !== 0 || unit !== 0)
+      ? qty * unit
+      : Number(li.amount) || 0;
+  return Math.round(subtotal * (1 - discount / 100) * 100) / 100;
+}
+
+export function lineSubtotal(li: LineItem): number {
+  const qty = Number(li.quantity);
+  const unit = Number(li.unit_price);
+  if (Number.isFinite(qty) && Number.isFinite(unit)) return Math.round(qty * unit * 100) / 100;
+  return Number(li.amount) || 0;
 }
 
 /**

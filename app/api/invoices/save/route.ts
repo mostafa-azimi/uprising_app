@@ -16,6 +16,10 @@ export const dynamic = 'force-dynamic';
 
 const LineItemSchema = z.object({
   description: z.string().max(500),
+  // quantity / unit_price are optional for backwards compat with older drafts
+  // that only tracked a single `amount`. We backfill them server-side below.
+  quantity: z.number().finite().optional(),
+  unit_price: z.number().finite().optional(),
   amount: z.number().finite(),
   discount_pct: z.number().min(0).max(100),
 });
@@ -35,9 +39,17 @@ const Body = z.object({
   notes: z.string().max(2000).nullable(),
 });
 
+function deriveAmount(li: z.infer<typeof LineItemSchema>): number {
+  // Prefer qty × unit_price; fall back to the explicit `amount` for legacy.
+  if (typeof li.quantity === 'number' && typeof li.unit_price === 'number') {
+    return Math.round(li.quantity * li.unit_price * 100) / 100;
+  }
+  return Math.round(li.amount * 100) / 100;
+}
+
 function lineTotal(li: z.infer<typeof LineItemSchema>): number {
   const discount = Math.max(0, Math.min(100, li.discount_pct));
-  return Math.round(li.amount * (1 - discount / 100) * 100) / 100;
+  return Math.round(deriveAmount(li) * (1 - discount / 100) * 100) / 100;
 }
 
 export async function POST(request: NextRequest) {
@@ -61,12 +73,23 @@ export async function POST(request: NextRequest) {
 
   // Round all monetary fields to 2 decimals up front so anything we store is
   // identical to what the PDF renders.
-  const lineItems = body.line_items.map((li) => ({
-    description: li.description,
-    amount: Math.round(li.amount * 100) / 100,
-    discount_pct: Math.round(li.discount_pct * 100) / 100,
-    line_total: lineTotal(li),
-  }));
+  const lineItems = body.line_items.map((li) => {
+    const quantity =
+      typeof li.quantity === 'number' && Number.isFinite(li.quantity) ? li.quantity : 1;
+    const unitPrice =
+      typeof li.unit_price === 'number' && Number.isFinite(li.unit_price)
+        ? li.unit_price
+        : Number(li.amount) || 0;
+    const amount = Math.round(quantity * unitPrice * 100) / 100;
+    return {
+      description: li.description,
+      quantity: Math.round(quantity * 100) / 100,
+      unit_price: Math.round(unitPrice * 100) / 100,
+      amount,
+      discount_pct: Math.round(li.discount_pct * 100) / 100,
+      line_total: lineTotal(li),
+    };
+  });
   const subtotal = Math.round(lineItems.reduce((s, li) => s + li.line_total, 0) * 100) / 100;
   const invoiceDiscountPct = Math.max(0, Math.min(100, body.invoice_discount_pct));
   const total = Math.round(subtotal * (1 - invoiceDiscountPct / 100) * 100) / 100;

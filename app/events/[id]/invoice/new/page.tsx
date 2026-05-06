@@ -72,6 +72,8 @@ export default async function NewInvoicePage({ params }: { params: { id: string 
     line_items: [
       {
         description: event.name ?? 'Event credits',
+        quantity: 1,
+        unit_price: Math.round(totalAmount * 100) / 100,
         amount: Math.round(totalAmount * 100) / 100,
         discount_pct: 25,
       },
