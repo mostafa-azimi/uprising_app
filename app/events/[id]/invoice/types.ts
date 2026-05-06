@@ -19,22 +19,22 @@ export interface LineItem {
 /**
  * Older invoices were stored with only { description, amount, discount_pct }.
  * Coerce them into the qty/unit_price shape so the editor can display them.
+ *
+ * Accepts `unknown` so it can be called either with a typed LineItem (from the
+ * editor's own state) or with raw JSON straight out of the DB without a cast.
  */
-export function normalizeLineItem(raw: Partial<LineItem> & Record<string, unknown>): LineItem {
-  const description = typeof raw.description === 'string' ? raw.description : '';
-  const discount_pct = Number(raw.discount_pct ?? 0) || 0;
+export function normalizeLineItem(raw: unknown): LineItem {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const description = typeof r.description === 'string' ? r.description : '';
+  const discount_pct = Number(r.discount_pct ?? 0) || 0;
 
-  const rawQty = raw.quantity;
-  const rawUnit = raw.unit_price;
-  const rawAmount = raw.amount;
-
-  let quantity = Number(rawQty);
-  let unit_price = Number(rawUnit);
+  let quantity = Number(r.quantity);
+  let unit_price = Number(r.unit_price);
 
   if (!Number.isFinite(quantity) || quantity === 0) quantity = 1;
   if (!Number.isFinite(unit_price)) {
     // Legacy rows: amount IS the subtotal, so unit_price = amount / 1 = amount
-    unit_price = Number(rawAmount ?? 0) || 0;
+    unit_price = Number(r.amount ?? 0) || 0;
   }
 
   const amount = Math.round(quantity * unit_price * 100) / 100;
