@@ -7,36 +7,11 @@ export default function ToolsPage() {
     <main className="min-h-screen px-8 py-10 max-w-5xl mx-auto">
       <h1 className="text-3xl font-bold mb-1">Tools</h1>
       <p className="text-sm text-muted mb-8">
-        Admin utilities for one-off imports, backfills, and data sync. Use these for migration
-        and reconciliation tasks — not for everyday operations.
+        Admin utilities for ongoing data sync and reconciliation tasks.
       </p>
-
-      <h2 className="text-lg font-semibold mb-3">Imports & backfills</h2>
-      <section className="grid sm:grid-cols-2 gap-4 mb-10">
-        <Card
-          href="/admin/import-master"
-          title="Import Master Rise file"
-          desc="One-shot CSV importer for the Rise master export. Creates customers + grants from every row."
-        />
-        <Card
-          href="/admin/link-gift-cards"
-          title="Link gift cards from Master Rise file"
-          desc="Backfill missing shopify_gift_card_id / loyalty_card_code on existing customers. DB only — no Shopify calls."
-        />
-      </section>
 
       <h2 className="text-lg font-semibold mb-3">Reconciliation & sync</h2>
       <section className="grid sm:grid-cols-2 gap-4 mb-10">
-        <Card
-          href="/admin/sync-shopify-balances"
-          title="Sync balances from Shopify (auto)"
-          desc="Pull gift card balances directly from Shopify, preview discrepancies, then apply. Each adjustment writes a 'Shopify sync reconciliation' ledger entry."
-        />
-        <Card
-          href="/admin/reconcile-shopify"
-          title="Reconcile from Shopify (CSV)"
-          desc="Manual variant: upload a fresh Shopify gift cards export to bring our DB in sync. Use the auto sync above instead unless you have a reason to prefer the CSV."
-        />
         <Card
           href="/admin/backfill-redemptions"
           title="Backfill redemptions"
@@ -60,24 +35,6 @@ export default function ToolsPage() {
           href="/admin/push-to-klaviyo"
           title="Push to Klaviyo (catch-up)"
           desc="Re-push current DB state (loyalty_card_code, balance, expiration) to Klaviyo for every customer with a balance change in a date range. Use this after Klaviyo outages."
-        />
-      </section>
-
-      <h2 className="text-lg font-semibold mb-3">Upload</h2>
-      <section className="grid sm:grid-cols-2 gap-4 mb-10">
-        <Card
-          href="/upload/grants"
-          title="Upload event credits"
-          desc="Standard upload flow with optional Skip Shopify / Skip Klaviyo toggles for DB-only backfills."
-        />
-      </section>
-
-      <h2 className="text-lg font-semibold mb-3">Temporary cleanup tools</h2>
-      <section className="grid sm:grid-cols-2 gap-4">
-        <Card
-          href="/tools/temporary"
-          title="Temporary tools →"
-          desc="One-time data cleanup utilities for backfilling Shopify links. Not part of the regular operational toolkit."
         />
       </section>
     </main>

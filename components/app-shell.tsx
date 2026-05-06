@@ -32,22 +32,10 @@ const NAV: NavItem[] = [
     href: '/tools',
     label: 'Tools',
     children: [
-      { href: '/admin/import-master', label: 'Import Master Rise file' },
-      { href: '/admin/link-gift-cards', label: 'Link gift cards' },
-      { href: '/admin/reconcile-shopify', label: 'Reconcile from Shopify (CSV)' },
-      { href: '/admin/sync-shopify-balances', label: 'Sync balances from Shopify' },
       { href: '/admin/backfill-redemptions', label: 'Backfill redemptions' },
       { href: '/admin/klaviyo-failures', label: 'Klaviyo failures' },
       { href: '/admin/push-to-klaviyo', label: 'Push to Klaviyo (catch-up)' },
       { href: '/test-connections', label: 'Test connections' },
-    ],
-  },
-  {
-    href: '/tools/temporary',
-    label: 'Temporary tools',
-    children: [
-      { href: '/admin/upload-loyalty-codes', label: 'Upload loyalty codes (temp)' },
-      { href: '/admin/link-by-code', label: 'Link gift cards by code (temp)' },
     ],
   },
   {
