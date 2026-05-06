@@ -45,6 +45,7 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
   const [data, setData] = useState<InvoiceData>(initial);
   const [saving, setSaving] = useState(false);
   const [marking, setMarking] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedNote, setSavedNote] = useState<string | null>(null);
 
@@ -157,6 +158,37 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
     });
   }
 
+  async function handleDelete() {
+    if (deleting) return;
+    if (!data.id) {
+      // Unsaved draft — just navigate away.
+      router.push(`/events/${eventId}`);
+      return;
+    }
+    const label = data.invoice_number ?? 'this draft';
+    const confirmed = window.confirm(
+      `Delete ${label}? This permanently removes the invoice. This cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/invoices/delete', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ id: data.id }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+      router.push(`/events/${eventId}`);
+      router.refresh();
+    } catch (e) {
+      setError((e as Error).message);
+      setDeleting(false);
+    }
+  }
+
   return (
     <main className="min-h-screen px-8 py-10 max-w-7xl mx-auto">
       <Link href={`/events/${eventId}`} className="text-sm text-muted hover:text-ink">
@@ -197,6 +229,15 @@ export function InvoiceEditor({ initial, eventId }: { initial: InvoiceData; even
               >
                 {marking ? 'Marking…' : 'Mark paid'}
               </button>
+              {data.id && (
+                <button
+                  onClick={handleDelete}
+                  disabled={deleting || saving || marking}
+                  className="px-3 py-2 text-sm border border-rose-200 text-rose-700 rounded-lg hover:bg-rose-50 transition disabled:opacity-50"
+                >
+                  {deleting ? 'Deleting…' : 'Delete'}
+                </button>
+              )}
             </>
           )}
           {isPaid && data.paid_at && (
