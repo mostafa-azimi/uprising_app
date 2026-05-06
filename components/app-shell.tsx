@@ -32,6 +32,7 @@ const NAV: NavItem[] = [
     href: '/tools',
     label: 'Tools',
     children: [
+      { href: '/admin/sync-shopify-balances', label: 'Sync balances from Shopify' },
       { href: '/admin/backfill-redemptions', label: 'Backfill redemptions' },
       { href: '/admin/klaviyo-failures', label: 'Klaviyo failures' },
       { href: '/admin/push-to-klaviyo', label: 'Push to Klaviyo (catch-up)' },

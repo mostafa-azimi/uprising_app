@@ -13,6 +13,11 @@ export default function ToolsPage() {
       <h2 className="text-lg font-semibold mb-3">Reconciliation & sync</h2>
       <section className="grid sm:grid-cols-2 gap-4 mb-10">
         <Card
+          href="/admin/sync-shopify-balances"
+          title="Sync balances from Shopify"
+          desc="Real-time compare DB balances vs Shopify gift card balances. Section A (DB > Shopify): bulk-fix DB. Section B (Shopify > DB): per-row choose Fix Shopify or Fix DB."
+        />
+        <Card
           href="/admin/backfill-redemptions"
           title="Backfill redemptions"
           desc="Pull paid Shopify orders in a date range and process gift_card transactions through the same logic as the orders/paid webhook. Updates balances + revenue attribution."
