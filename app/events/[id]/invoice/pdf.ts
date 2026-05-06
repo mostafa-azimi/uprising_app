@@ -148,15 +148,20 @@ const COL_DISCOUNT_X = 158;
 const COL_TOTAL_X = PAGE_W - MARGIN_X;
 
 // --- Table layout constants (mm) -------------------------------------------
-const HEADER_LABEL_OFFSET = 5;        // gap from top border to header label baseline
-const HEADER_TO_FIRST_ROW = 9;        // gap from header bottom border to first row baseline
-const LINE_TXT_HEIGHT = 4.5;          // approx text line height at 10pt
-const ROW_BOTTOM_PAD = 4;             // padding below a row before its divider
-const ROW_TOP_PAD = 4;                // padding above the next row after a divider
-const TABLE_BOTTOM_PAD = 4;           // padding after the last row before totals
+// All values measured from the table's top-y. Generous spacing so that
+// 10pt text (which extends ~3mm above its baseline) never collides with the
+// header border or row dividers.
+const HEADER_LABEL_BASELINE = 6;      // baseline of "DESCRIPTION" header text
+const HEADER_BOTTOM_BORDER = 9;       // thin line below header text
+const FIRST_ROW_BASELINE = 16;        // baseline of first row — 7mm below border
+const TEXT_LINE_HEIGHT = 4.5;         // 10pt text line height
+const BREAKDOWN_LINE_HEIGHT = 4;      // 8pt muted breakdown line
+const ROW_BOTTOM_PAD = 5;             // gap from row's last text baseline to divider
+const ROW_TOP_PAD = 6;                // gap from divider to next row's baseline
+const TABLE_BOTTOM_PAD = 5;           // gap after closing border before totals
 
 function renderTable(doc: jsPDF, items: LineItem[], y: number): number {
-  // Top border
+  // Top border (medium)
   setDraw(doc, LINE);
   doc.setLineWidth(0.2);
   doc.line(MARGIN_X, y, PAGE_W - MARGIN_X, y);
@@ -165,17 +170,16 @@ function renderTable(doc: jsPDF, items: LineItem[], y: number): number {
   setColor(doc, MUTED);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.text('DESCRIPTION', COL_DESC_X, y + HEADER_LABEL_OFFSET);
-  doc.text('AMOUNT', COL_AMOUNT_X, y + HEADER_LABEL_OFFSET, { align: 'right' });
-  doc.text('DISCOUNT', COL_DISCOUNT_X, y + HEADER_LABEL_OFFSET, { align: 'right' });
-  doc.text('LINE TOTAL', COL_TOTAL_X, y + HEADER_LABEL_OFFSET, { align: 'right' });
+  doc.text('DESCRIPTION', COL_DESC_X, y + HEADER_LABEL_BASELINE);
+  doc.text('AMOUNT', COL_AMOUNT_X, y + HEADER_LABEL_BASELINE, { align: 'right' });
+  doc.text('DISCOUNT', COL_DISCOUNT_X, y + HEADER_LABEL_BASELINE, { align: 'right' });
+  doc.text('LINE TOTAL', COL_TOTAL_X, y + HEADER_LABEL_BASELINE, { align: 'right' });
 
   // Header bottom border (thin)
   doc.setLineWidth(0.1);
-  doc.line(MARGIN_X, y + HEADER_LABEL_OFFSET + 2.5, PAGE_W - MARGIN_X, y + HEADER_LABEL_OFFSET + 2.5);
+  doc.line(MARGIN_X, y + HEADER_BOTTOM_BORDER, PAGE_W - MARGIN_X, y + HEADER_BOTTOM_BORDER);
 
-  // First-row baseline
-  let rowY = y + HEADER_TO_FIRST_ROW + HEADER_LABEL_OFFSET - 5;
+  let rowY = y + FIRST_ROW_BASELINE;
 
   items.forEach((li, idx) => {
     setColor(doc, INK);
@@ -189,10 +193,12 @@ function renderTable(doc: jsPDF, items: LineItem[], y: number): number {
     const showBreakdown =
       Number(li.quantity) !== 1 || Math.abs(Number(li.unit_price) - subtotal) > 0.005;
 
-    let descBlockHeight = descLines.length * LINE_TXT_HEIGHT;
+    // Track the baseline of the LAST line drawn in this row so the divider
+    // sits below all of it (description wrap + optional breakdown line).
+    let lastBaselineY = rowY + (descLines.length - 1) * TEXT_LINE_HEIGHT;
 
     if (showBreakdown) {
-      const breakdownY = rowY + descBlockHeight - 0.5;
+      const breakdownY = lastBaselineY + BREAKDOWN_LINE_HEIGHT;
       doc.setFontSize(8);
       setColor(doc, MUTED);
       doc.text(
@@ -200,14 +206,14 @@ function renderTable(doc: jsPDF, items: LineItem[], y: number): number {
         COL_DESC_X,
         breakdownY
       );
-      // restore for the right-side values
+      lastBaselineY = breakdownY;
+      // restore for any subsequent text
       doc.setFontSize(10);
       setColor(doc, INK);
-      descBlockHeight += 4;
     }
 
-    // Right-aligned values sit on the FIRST line of the description so
-    // multiline / breakdown rows don't shift the totals column.
+    // Right-side values anchor to the FIRST line of the description so the
+    // numbers column stays aligned across rows of differing height.
     doc.setFont('helvetica', 'normal');
     doc.text(fmtMoney(subtotal), COL_AMOUNT_X, rowY, { align: 'right' });
     doc.text(li.discount_pct ? `${li.discount_pct}%` : '—', COL_DISCOUNT_X, rowY, {
@@ -216,23 +222,26 @@ function renderTable(doc: jsPDF, items: LineItem[], y: number): number {
     doc.setFont('helvetica', 'bold');
     doc.text(fmtMoney(lineTotal(li)), COL_TOTAL_X, rowY, { align: 'right' });
 
-    rowY += descBlockHeight + ROW_BOTTOM_PAD;
-
-    // Inter-row divider — only between rows, not after the last one
+    // Move below the visual bottom of all text in this row, then optionally
+    // draw a divider, then position rowY at the next row's baseline.
+    const dividerY = lastBaselineY + ROW_BOTTOM_PAD;
     if (idx < items.length - 1) {
       setDraw(doc, LINE);
       doc.setLineWidth(0.1);
-      doc.line(MARGIN_X, rowY, PAGE_W - MARGIN_X, rowY);
-      rowY += ROW_TOP_PAD;
+      doc.line(MARGIN_X, dividerY, PAGE_W - MARGIN_X, dividerY);
+      rowY = dividerY + ROW_TOP_PAD;
+    } else {
+      // Last row — no divider, just close the table.
+      rowY = dividerY;
     }
   });
 
-  // Bottom of table — a thin border to close it off cleanly before totals
+  // Bottom border (medium) below the last row's pad
   setDraw(doc, LINE);
   doc.setLineWidth(0.2);
-  doc.line(MARGIN_X, rowY + 1, PAGE_W - MARGIN_X, rowY + 1);
+  doc.line(MARGIN_X, rowY, PAGE_W - MARGIN_X, rowY);
 
-  return rowY + 1 + TABLE_BOTTOM_PAD;
+  return rowY + TABLE_BOTTOM_PAD;
 }
 
 function formatQty(qty: number): string {
